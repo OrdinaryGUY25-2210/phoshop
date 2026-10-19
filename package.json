@@ -1,0 +1,11 @@
+{
+  "name": "ps-lite",
+  "productName": "PS Lite",
+  "version": "1.0.0",
+  "description": "Editor foto gaya Photoshop - offline",
+  "main": "desktop/main.cjs",
+  "dependencies": {
+    "@electron/packager": "^20.3.0",
+    "electron": "^33.4.11"
+  }
+}

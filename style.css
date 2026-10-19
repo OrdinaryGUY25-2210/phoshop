@@ -218,6 +218,7 @@ html, body {
   border-color: var(--accent2);
   color: #fff;
 }
+.tool-btn svg { width: 20px; height: 20px; display: block; }
 
 #color-stack {
   position: relative;

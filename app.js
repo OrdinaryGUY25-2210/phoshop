@@ -15,6 +15,9 @@ const App = {
   brushSize: 24, hardness: 100, toolOpacity: 100,
   bucketTolerance: 32,
   shapeType: "rect", shapeMode: "fill",
+  gradMode: "fgt",
+  transform: null,
+  gradEnd: null,
   fontFamily: "Arial", fontSize: 42, fontBold: false, fontItalic: false,
   selection: null, cropRect: null, marqueeDraft: null,
   tempShape: null, floatSel: null,
@@ -32,17 +35,32 @@ const App = {
 };
 
 const TOOLS = {
-  move:    { label: "Pindah",      key: "V", icon: "✥" },
-  marquee: { label: "Kotak Pilih", key: "M", icon: "▦" },
-  crop:    { label: "Pangkas",     key: "C", icon: "✂" },
-  brush:   { label: "Kuas",        key: "B", icon: "🖌" },
-  eraser:  { label: "Penghapus",   key: "E", icon: "⌫" },
-  bucket:  { label: "Ember Cat",   key: "G", icon: "🪣" },
-  dropper: { label: "Penetes",     key: "I", icon: "💧" },
-  text:    { label: "Teks",        key: "T", icon: "𝚃" },
-  shape:   { label: "Bentuk",      key: "U", icon: "⬚" },
-  zoom:    { label: "Zoom",        key: "Z", icon: "🔍" },
-  hand:    { label: "Tangan",      key: "H", icon: "✋" },
+  move:    { label: "Pindah",      key: "V", icon: "✥",
+    svg: '<path d="M12 3v18M3 12h18"/><path d="M9 6l3-3 3 3M9 18l3 3 3-3M6 9l-3 3 3 3M18 9l3 3-3 3"/>' },
+  marquee: { label: "Kotak Pilih", key: "M", icon: "▦",
+    svg: '<rect x="4" y="5" width="16" height="14" rx="1" stroke-dasharray="3 2"/>' },
+  lasso:   { label: "Lasso",       key: "L", icon: "◯",
+    svg: '<path d="M12 4c5 0 8 3 8 7 0 4-3 7-8 7-4 0-7-2-7-5 0-2 2-4 4-4 3 0 4 2 3 3"/><path d="M7 18l-2 3"/>' },
+  crop:    { label: "Pangkas",     key: "C", icon: "✂",
+    svg: '<path d="M7 2v15h15M2 7h15v15"/>' },
+  brush:   { label: "Kuas",        key: "B", icon: "🖌",
+    svg: '<path d="M4 20c3 1 6 0 7-3l9-11 3 3-9 11c-2 2-6 2-10 0z"/>' },
+  eraser:  { label: "Penghapus",   key: "E", icon: "⌫",
+    svg: '<path d="M7 21h14M4 15l7-11 9 6-7 11H8l-4-3z"/><path d="M10 10l6 5"/>' },
+  bucket:  { label: "Ember Cat",   key: "G", icon: "🪣",
+    svg: '<path d="M6 10l6-6 8 8-6 6a4 4 0 01-6 0z"/><path d="M19 14c1 2 2 3 2 4a2 2 0 11-4 0c0-1 1-2 2-4z"/>' },
+  gradient:{ label: "Gradasi",     key: "N", icon: "▥",
+    svg: '<rect x="3" y="6" width="18" height="12" rx="1"/><path d="M7 6v12M11 6v12M15 6v12"/>' },
+  dropper: { label: "Penetes",     key: "I", icon: "💧",
+    svg: '<path d="M19 3l2 2-9 9-3 1 1-3 9-9z"/><path d="M9 13c-3 1-5 3-5 6 0 0-2 1-1 2"/>' },
+  text:    { label: "Teks",        key: "T", icon: "𝚃",
+    svg: '<path d="M5 7V4h14v3M12 4v16M9 20h6"/>' },
+  shape:   { label: "Bentuk",      key: "U", icon: "⬚",
+    svg: '<rect x="3" y="5" width="11" height="11" rx="1"/><circle cx="16" cy="15" r="5"/>' },
+  zoom:    { label: "Zoom",        key: "Z", icon: "🔍",
+    svg: '<circle cx="10" cy="10" r="6"/><path d="M15 15l6 6"/>' },
+  hand:    { label: "Tangan",      key: "H", icon: "✋",
+    svg: '<path d="M8 13V6a1.5 1.5 0 013 0v5M11 11V5a1.5 1.5 0 013 0v6M14 11V7a1.5 1.5 0 013 0v7c0 4-2 7-6 7s-6-2-6-6v-2a1.5 1.5 0 013 0"/>' },
 };
 
 const PALETTE = [
@@ -57,6 +75,7 @@ const view = $("#view"), vctx = view.getContext("2d");
 const viewport = $("#viewport");
 const composite = document.createElement("canvas"), cctx = composite.getContext("2d");
 const strokeCanvas = document.createElement("canvas"), sctx = strokeCanvas.getContext("2d", { willReadFrequently: true });
+const gradCanvas = document.createElement("canvas"), grctx = gradCanvas.getContext("2d");
 let checkerPattern = null;
 
 /* ================= UTIL ================= */
@@ -199,6 +218,7 @@ function redo() { if (App.historyIndex < App.history.length - 1) { jumpTo(App.hi
 function ensureComposite() {
   composite.width = App.docW; composite.height = App.docH;
   strokeCanvas.width = App.docW; strokeCanvas.height = App.docH;
+  gradCanvas.width = App.docW; gradCanvas.height = App.docH;
 }
 function initChecker() {
   const p = document.createElement("canvas");
@@ -265,6 +285,26 @@ function render() {
     ctx.drawImage(strokeCanvas, 0, 0);
     ctx.globalAlpha = 1;
   }
+  // live gradient preview
+  if (App.drag && App.drag.type === "gradient" && App.gradEnd) {
+    grctx.clearRect(0, 0, App.docW, App.docH);
+    drawGradient(grctx, App.drag.x0, App.drag.y0, App.gradEnd.x, App.gradEnd.y);
+    ctx.globalAlpha = App.toolOpacity / 100;
+    ctx.drawImage(gradCanvas, 0, 0);
+    ctx.globalAlpha = 1;
+  }
+  // live lasso path
+  if (App.drag && App.drag.type === "lasso" && App.lassoPts && App.lassoPts.length > 1) {
+    ctx.save();
+    ctx.lineWidth = 1.2 / App.zoom;
+    ctx.setLineDash([4 / App.zoom, 4 / App.zoom]);
+    ctx.strokeStyle = "#fff";
+    ctx.beginPath();
+    ctx.moveTo(App.lassoPts[0][0], App.lassoPts[0][1]);
+    for (const q of App.lassoPts) ctx.lineTo(q[0], q[1]);
+    ctx.stroke();
+    ctx.restore();
+  }
 
   // doc border + grid
   ctx.lineWidth = 1 / App.zoom;
@@ -284,6 +324,7 @@ function render() {
   if (App.marqueeDraft) drawMarchingAnts(ctx, App.marqueeDraft);
   else if (App.selection && !App.floatSel) drawMarchingAnts(ctx, App.selection);
   if (App.cropRect) drawCropRect(ctx);
+  if (App.transform) drawTransformOverlay(ctx);
 
   ctx.restore();
 
@@ -301,13 +342,19 @@ function render() {
 function drawMarchingAnts(ctx, r) {
   const z = App.zoom;
   ctx.save();
-  ctx.lineWidth = 1.2 / z;
+  const path = r.type === "lasso" ? selPath2D(r) : null;
+  const strokeIt = (dash) => {
+    ctx.lineWidth = 1.2 / z;
+    if (path) { ctx.stroke(path); return; }
+    ctx.strokeRect(r.x, r.y, r.w, r.h);
+  };
+  ctx.setLineDash([]);
   ctx.strokeStyle = "rgba(255,255,255,.9)";
-  ctx.strokeRect(r.x, r.y, r.w, r.h);
+  strokeIt();
   ctx.setLineDash([4 / z, 4 / z]);
   ctx.lineDashOffset = -(performance.now() / 55) % 8 / z;
   ctx.strokeStyle = "#000";
-  ctx.strokeRect(r.x, r.y, r.w, r.h);
+  strokeIt();
   ctx.restore();
 }
 function drawCropRect(ctx) {
@@ -340,15 +387,163 @@ function drawTempShape(ctx) {
   ctx.save();
   ctx.globalAlpha = App.toolOpacity / 100;
   const r = normalizeRect(s.x0, s.y0, s.x1, s.y1);
-  shapePath(ctx, s.type, r);
-  if (s.mode !== "stroke") { ctx.fillStyle = s.color; ctx.fill(); }
-  if (s.mode !== "fill") { ctx.strokeStyle = s.color; ctx.lineWidth = 2; ctx.stroke(); }
+  if (s.type === "line") {
+    ctx.beginPath(); ctx.moveTo(s.x0, s.y0); ctx.lineTo(s.x1, s.y1);
+    ctx.strokeStyle = s.color; ctx.lineWidth = Math.max(2, App.brushSize / 6); ctx.lineCap = "round"; ctx.stroke();
+  } else {
+    shapePath(ctx, s.type, r);
+    if (s.mode !== "stroke") { ctx.fillStyle = s.color; ctx.fill(); }
+    if (s.mode !== "fill") { ctx.strokeStyle = s.color; ctx.lineWidth = 2; ctx.stroke(); }
+  }
   ctx.restore();
 }
 function shapePath(ctx, type, r) {
   ctx.beginPath();
   if (type === "ellipse") ctx.ellipse(r.x + r.w / 2, r.y + r.h / 2, r.w / 2, r.h / 2, 0, 0, Math.PI * 2);
   else ctx.rect(r.x, r.y, r.w, r.h);
+}
+
+/* ================= GRADIENT ================= */
+function drawGradient(ctx2, x0, y0, x1, y1) {
+  const g = ctx2.createLinearGradient(x0, y0, x1, y1);
+  if (App.gradMode === "fgbg") { g.addColorStop(0, App.color); g.addColorStop(1, App.secondary); }
+  else {
+    const { r, g: gg, b } = hexToRgb(App.color);
+    g.addColorStop(0, `rgba(${r},${gg},${b},1)`);
+    g.addColorStop(1, `rgba(${r},${gg},${b},0)`);
+  }
+  ctx2.fillStyle = g;
+  ctx2.fillRect(0, 0, App.docW, App.docH);
+}
+
+/* ================= LASSO HELPERS ================= */
+function selPath2D(sel) {
+  const p = new Path2D();
+  if (!sel || !sel.pts || !sel.pts.length) return p;
+  p.moveTo(sel.pts[0][0], sel.pts[0][1]);
+  for (let i = 1; i < sel.pts.length; i++) p.lineTo(sel.pts[i][0], sel.pts[i][1]);
+  p.closePath();
+  return p;
+}
+
+/* ================= FREE TRANSFORM ================= */
+function contentBBox(l) {
+  const d = l.ctx.getImageData(0, 0, App.docW, App.docH).data;
+  let minX = App.docW, minY = App.docH, maxX = -1, maxY = -1;
+  for (let y = 0; y < App.docH; y++) for (let x = 0; x < App.docW; x++) {
+    if (d[(y * App.docW + x) * 4 + 3] > 0) {
+      if (x < minX) minX = x; if (x > maxX) maxX = x;
+      if (y < minY) minY = y; if (y > maxY) maxY = y;
+    }
+  }
+  return maxX < 0 ? null : { x: minX, y: minY, w: maxX - minX + 1, h: maxY - minY + 1 };
+}
+function startTransform() {
+  const l = activeLayer();
+  if (!l || l.locked) return toast("Lapisan terkunci / tidak ada", true);
+  const bbox = contentBBox(l);
+  if (!bbox) return toast("Lapisan kosong", true);
+  App.transform = { snap: cloneCanvas(l.canvas), bbox, cx: bbox.x + bbox.w / 2, cy: bbox.y + bbox.h / 2, ang: 0, sx: 1, sy: 1, tx: 0, ty: 0, mode: null };
+  updateOptionsBar();
+  App.dirty = true;
+}
+function tfCorners(t) {
+  const { bbox, cx, cy, ang, sx, sy, tx, ty } = t;
+  const pts = [[bbox.x, bbox.y], [bbox.x + bbox.w, bbox.y], [bbox.x + bbox.w, bbox.y + bbox.h], [bbox.x, bbox.y + bbox.h]];
+  const c = Math.cos(ang), s = Math.sin(ang);
+  return pts.map(([px, py]) => {
+    const x = (px - cx) * sx, y = (py - cy) * sy;
+    return { x: cx + x * c - y * s + tx, y: cy + x * s + y * c + ty };
+  });
+}
+function docToScreen(x, y) { return { x: x * App.zoom + App.panX, y: y * App.zoom + App.panY }; }
+function transformHit(p) {
+  const t = App.transform;
+  const cs = tfCorners(t).map(c => docToScreen(c.x, c.y));
+  const names = ["tl", "tr", "br", "bl"];
+  for (let i = 0; i < 4; i++) {
+    if (Math.hypot(p.x - cs[i].x, p.y - cs[i].y) < 10) return names[i];
+  }
+  const m = screenToDoc(p.x, p.y);
+  let inside = false;
+  for (let i = 0, j = 3; i < 4; j = i++) {
+    const xi = tfCorners(t)[i].x, yi = tfCorners(t)[i].y, xj = tfCorners(t)[j].x, yj = tfCorners(t)[j].y;
+    if ((yi > m.y) !== (yj > m.y) && m.x < (xj - xi) * (m.y - yi) / (yj - yi) + xi) inside = !inside;
+  }
+  return inside ? "move" : "rotate";
+}
+function transformDown(p) {
+  const t = App.transform;
+  t.mode = transformHit(p);
+  t.start = { px: p.x, py: p.y, ang: t.ang, sx: t.sx, sy: t.sy, tx: t.tx, ty: t.ty };
+  const ctr = docToScreen(t.cx + t.tx, t.cy + t.ty);
+  t.startA = Math.atan2(p.y - ctr.y, p.x - ctr.x);
+  t.startD = Math.max(1, Math.hypot(p.x - ctr.x, p.y - ctr.y));
+}
+function transformMove(p) {
+  const t = App.transform;
+  if (!t.mode || !t.start) return;
+  const d = screenToDoc(p.x, p.y);
+  const ds0 = screenToDoc(t.start.px, t.start.py);
+  if (t.mode === "move") { t.tx = t.start.tx + (d.x - ds0.x); t.ty = t.start.ty + (d.y - ds0.y); }
+  else if (t.mode === "rotate") {
+    const ctr = docToScreen(t.cx + t.tx, t.cy + t.ty);
+    t.ang = t.start.ang + (Math.atan2(p.y - ctr.y, p.x - ctr.x) - t.startA);
+  } else {
+    const ctr = docToScreen(t.cx + t.tx, t.cy + t.ty);
+    const f = Math.hypot(p.x - ctr.x, p.y - ctr.y) / t.startD;
+    t.sx = t.start.sx * f; t.sy = t.start.sy * f;
+  }
+  App.dirty = true;
+}
+function commitTransform() {
+  const t = App.transform;
+  if (!t) return;
+  const l = activeLayer();
+  if (l) {
+    l.ctx.clearRect(0, 0, App.docW, App.docH);
+    l.ctx.save();
+    l.ctx.translate(t.cx + t.tx, t.cy + t.ty);
+    l.ctx.rotate(t.ang);
+    l.ctx.scale(t.sx, t.sy);
+    l.ctx.drawImage(t.snap, -t.cx, -t.cy);
+    l.ctx.restore();
+    pushHistory("Transformasi");
+    updateLayerThumbs();
+  }
+  App.transform = null;
+  updateOptionsBar();
+  App.dirty = true;
+}
+function cancelTransform() {
+  const t = App.transform;
+  if (!t) return;
+  const l = activeLayer();
+  if (l) { l.ctx.clearRect(0, 0, App.docW, App.docH); l.ctx.drawImage(t.snap, 0, 0); }
+  App.transform = null;
+  updateOptionsBar();
+  App.dirty = true;
+}
+function drawTransformOverlay(ctx) {
+  const t = App.transform;
+  if (!t) return;
+  const z = App.zoom;
+  const cs = tfCorners(t);
+  ctx.save();
+  ctx.lineWidth = 1.2 / z;
+  ctx.strokeStyle = "#3a8ee6";
+  ctx.beginPath();
+  ctx.moveTo(cs[0].x, cs[0].y);
+  for (let i = 1; i < 4; i++) ctx.lineTo(cs[i].x, cs[i].y);
+  ctx.closePath();
+  ctx.stroke();
+  ctx.fillStyle = "#fff";
+  ctx.strokeStyle = "#3a8ee6";
+  for (const c of cs) {
+    ctx.fillRect(c.x - 4 / z, c.y - 4 / z, 8 / z, 8 / z);
+    ctx.strokeRect(c.x - 4 / z, c.y - 4 / z, 8 / z, 8 / z);
+  }
+  ctx.restore();
 }
 
 /* render loop */
@@ -460,9 +655,21 @@ function cancelStroke() {
 
 /* ---- tool handlers ---- */
 function toolDown(e, p) {
+  if (App.transform) { transformDown(p); return; }
   const d = screenToDoc(p.x, p.y);
   const layer = activeLayer();
   switch (App.tool) {
+    case "lasso": {
+      App.drag = { type: "lasso" };
+      App.lassoPts = [[d.x, d.y]];
+      break;
+    }
+    case "gradient": {
+      if (!layer || layer.locked) return toast("Lapisan terkunci / tidak ada", true);
+      App.drag = { type: "gradient", x0: d.x, y0: d.y };
+      App.gradEnd = null;
+      break;
+    }
     case "brush": {
       if (!layer || layer.locked) return toast("Lapisan terkunci / tidak ada", true);
       App.stroke = { last: d, color: App.color };
@@ -523,13 +730,23 @@ function toolDown(e, p) {
         App.drag = { type: "float", dx: d.x - App.floatSel.x, dy: d.y - App.floatSel.y };
       } else if (App.selection) {
         const s = App.selection;
-        if (d.x >= s.x && d.x < s.x + s.w && d.y >= s.y && d.y < s.y + s.h) {
+        const inSel = s.type === "lasso"
+          ? (() => { const p = s.pts; let ins = false; for (let i = 0, j = p.length - 1; i < p.length; j = i++) { if ((p[i][1] > d.y) !== (p[j][1] > d.y) && d.x < (p[j][0] - p[i][0]) * (d.y - p[i][1]) / (p[j][1] - p[i][1]) + p[i][0]) ins = !ins; } return ins; })()
+          : (d.x >= s.x && d.x < s.x + s.w && d.y >= s.y && d.y < s.y + s.h);
+        if (inSel) {
+          const bx = s.x, by = s.y;
           const c = document.createElement("canvas");
           c.width = Math.max(1, Math.round(s.w)); c.height = Math.max(1, Math.round(s.h));
-          c.getContext("2d").drawImage(layer.canvas, s.x, s.y, s.w, s.h, 0, 0, c.width, c.height);
-          layer.ctx.clearRect(s.x, s.y, s.w, s.h);
-          App.floatSel = { canvas: c, x: s.x, y: s.y };
-          App.drag = { type: "float", dx: d.x - s.x, dy: d.y - s.y };
+          const c2 = c.getContext("2d");
+          c2.translate(-bx, -by);
+          if (s.type === "lasso") { c2.clip(selPath2D(s)); }
+          c2.drawImage(layer.canvas, 0, 0);
+          layer.ctx.save();
+          if (s.type === "lasso") layer.ctx.clip(selPath2D(s));
+          layer.ctx.clearRect(bx, by, s.w, s.h);
+          layer.ctx.restore();
+          App.floatSel = { canvas: c, x: bx, y: by };
+          App.drag = { type: "float", dx: d.x - bx, dy: d.y - by };
         } else App.drag = null;
       } else {
         App.drag = { type: "layer", snap: cloneCanvas(layer.canvas), sx: d.x, sy: d.y };
@@ -554,9 +771,22 @@ function toolDown(e, p) {
 }
 
 function toolMove(e, p) {
+  if (App.transform) { transformMove(p); return; }
   if (!App.drag && !App.stroke) { App.dirty = true; return; }
   const d = screenToDoc(p.x, p.y);
   const layer = activeLayer();
+
+  if (App.drag && App.drag.type === "lasso") {
+    const last = App.lassoPts[App.lassoPts.length - 1];
+    if (Math.hypot(d.x - last[0], d.y - last[1]) > 2) App.lassoPts.push([d.x, d.y]);
+    App.dirty = true;
+    return;
+  }
+  if (App.drag && App.drag.type === "gradient") {
+    App.gradEnd = { x: d.x, y: d.y };
+    App.dirty = true;
+    return;
+  }
 
   if (App.stroke && App.stroke.erase) { eraseAt(d.x, d.y); App.stroke.last = d; App.dirty = true; return; }
   if (App.stroke) {
@@ -603,6 +833,7 @@ function toolMove(e, p) {
 }
 
 function toolUp(e, p) {
+  if (App.transform) { App.transform.mode = null; return; }
   const layer = activeLayer();
   if (App.stroke && !App.stroke.erase) {
     layer.ctx.globalAlpha = App.toolOpacity / 100;
@@ -622,10 +853,33 @@ function toolUp(e, p) {
   const d = screenToDoc(p.x, p.y);
 
   switch (App.drag.type) {
+    case "lasso": {
+      const pts = App.lassoPts;
+      App.lassoPts = null;
+      if (pts && pts.length > 2) {
+        const xs = pts.map(q => q[0]), ys = pts.map(q => q[1]);
+        const x = Math.round(Math.min(...xs)), y = Math.round(Math.min(...ys));
+        App.selection = { type: "lasso", pts, x, y, w: Math.round(Math.max(...xs) - x), h: Math.round(Math.max(...ys) - y) };
+      } else App.selection = null;
+      break;
+    }
+    case "gradient": {
+      const g = App.drag;
+      App.gradEnd = { x: d.x, y: d.y };
+      if (layer && !layer.locked && Math.hypot(d.x - g.x0, d.y - g.y0) > 2) {
+        layer.ctx.globalAlpha = App.toolOpacity / 100;
+        drawGradient(layer.ctx, g.x0, g.y0, d.x, d.y);
+        layer.ctx.globalAlpha = 1;
+        pushHistory("Gradasi");
+        updateLayerThumbs();
+      }
+      App.gradEnd = null;
+      break;
+    }
     case "marquee": {
       const r = App.marqueeDraft;
       App.marqueeDraft = null;
-      App.selection = (r && r.w > 2 && r.h > 2) ? { x: Math.round(r.x), y: Math.round(r.y), w: Math.round(r.w), h: Math.round(r.h) } : null;
+      App.selection = (r && r.w > 2 && r.h > 2) ? { type: "rect", x: Math.round(r.x), y: Math.round(r.y), w: Math.round(r.w), h: Math.round(r.h) } : null;
       break;
     }
     case "crop": {
@@ -647,9 +901,14 @@ function toolUp(e, p) {
           const r = normalizeRect(s.x0, s.y0, s.x1, s.y1);
           layer.ctx.save();
           layer.ctx.globalAlpha = App.toolOpacity / 100;
-          shapePath(layer.ctx, s.type, r);
-          if (s.mode !== "stroke") { layer.ctx.fillStyle = s.color; layer.ctx.fill(); }
-          if (s.mode !== "fill") { layer.ctx.strokeStyle = s.color; layer.ctx.lineWidth = 2; layer.ctx.stroke(); }
+          if (s.type === "line") {
+            layer.ctx.beginPath(); layer.ctx.moveTo(s.x0, s.y0); layer.ctx.lineTo(s.x1, s.y1);
+            layer.ctx.strokeStyle = s.color; layer.ctx.lineWidth = Math.max(2, App.brushSize / 6); layer.ctx.lineCap = "round"; layer.ctx.stroke();
+          } else {
+            shapePath(layer.ctx, s.type, r);
+            if (s.mode !== "stroke") { layer.ctx.fillStyle = s.color; layer.ctx.fill(); }
+            if (s.mode !== "fill") { layer.ctx.strokeStyle = s.color; layer.ctx.lineWidth = 2; layer.ctx.stroke(); }
+          }
           layer.ctx.restore();
           pushHistory("Bentuk");
           updateLayerThumbs();
@@ -661,7 +920,7 @@ function toolUp(e, p) {
       if (App.floatSel && layer) {
         layer.ctx.drawImage(App.floatSel.canvas, App.floatSel.x, App.floatSel.y);
         const s = App.selection;
-        if (s) App.selection = { x: App.floatSel.x, y: App.floatSel.y, w: App.floatSel.canvas.width, h: App.floatSel.canvas.height };
+        if (s) App.selection = { x: App.floatSel.x, y: App.floatSel.y, w: App.floatSel.canvas.width, h: App.floatSel.canvas.height, type: "rect" };
         App.floatSel = null;
         pushHistory("Pindah Seleksi");
         updateLayerThumbs();
@@ -776,16 +1035,31 @@ function commitText(x, y, text) {
 /* ================= EDIT ACTIONS ================= */
 function fillWith(hex, clear) {
   const l = activeLayer(); if (!l || l.locked) return toast("Lapisan terkunci / tidak ada", true);
-  const r = App.selection || { x: 0, y: 0, w: App.docW, h: App.docH };
-  if (clear) l.ctx.clearRect(r.x, r.y, r.w, r.h);
-  else { l.ctx.fillStyle = hex; l.ctx.fillRect(r.x, r.y, r.w, r.h); }
+  if (App.selection && App.selection.type === "lasso") {
+    l.ctx.save();
+    l.ctx.clip(selPath2D(App.selection));
+    if (clear) l.ctx.clearRect(App.selection.x, App.selection.y, App.selection.w, App.selection.h);
+    else { l.ctx.fillStyle = hex; l.ctx.fillRect(App.selection.x, App.selection.y, App.selection.w, App.selection.h); }
+    l.ctx.restore();
+  } else {
+    const r = App.selection || { x: 0, y: 0, w: App.docW, h: App.docH };
+    if (clear) l.ctx.clearRect(r.x, r.y, r.w, r.h);
+    else { l.ctx.fillStyle = hex; l.ctx.fillRect(r.x, r.y, r.w, r.h); }
+  }
   pushHistory(clear ? "Hapus" : "Isi Warna");
   updateLayerThumbs(); App.dirty = true;
 }
 function clearAction() {
   const l = activeLayer(); if (!l || l.locked) return toast("Lapisan terkunci / tidak ada", true);
-  const r = App.selection || { x: 0, y: 0, w: App.docW, h: App.docH };
-  l.ctx.clearRect(r.x, r.y, r.w, r.h);
+  if (App.selection && App.selection.type === "lasso") {
+    l.ctx.save();
+    l.ctx.clip(selPath2D(App.selection));
+    l.ctx.clearRect(App.selection.x, App.selection.y, App.selection.w, App.selection.h);
+    l.ctx.restore();
+  } else {
+    const r = App.selection || { x: 0, y: 0, w: App.docW, h: App.docH };
+    l.ctx.clearRect(r.x, r.y, r.w, r.h);
+  }
   pushHistory("Hapus");
   updateLayerThumbs(); App.dirty = true;
 }
@@ -1054,6 +1328,143 @@ function dialogNoise() {
   });
 }
 
+/* ================= CANVAS TRANSFORM ================= */
+function rotateFlip(op) {
+  const rot = op === "cw" || op === "ccw";
+  const nw = rot ? App.docH : App.docW, nh = rot ? App.docW : App.docH;
+  const rad = op === "cw" ? Math.PI / 2 : -Math.PI / 2;
+  for (const l of App.layers) {
+    const nc = document.createElement("canvas");
+    nc.width = nw; nc.height = nh;
+    const nc2 = nc.getContext("2d");
+    nc2.save();
+    if (op === "cw") { nc2.translate(nw, 0); nc2.rotate(rad); }
+    if (op === "ccw") { nc2.translate(0, nh); nc2.rotate(rad); }
+    if (op === "fh") { nc2.translate(nw, 0); nc2.scale(-1, 1); }
+    if (op === "fv") { nc2.translate(0, nh); nc2.scale(1, -1); }
+    nc2.drawImage(l.canvas, 0, 0);
+    nc2.restore();
+    l.canvas = nc; l.ctx = makeCtx(nc);
+  }
+  if (rot) { App.docW = nw; App.docH = nh; ensureComposite(); }
+  App.selection = null; App.cropRect = null;
+  fitView();
+  pushHistory({ cw: "Putar 90° CW", ccw: "Putar 90° CCW", fh: "Cermin Horizontal", fv: "Cermin Vertikal" }[op]);
+  updateUI();
+}
+
+/* ================= EXTRA FILTERS ================= */
+function convolve3x3(layer, k, offset) {
+  const img = layer.ctx.getImageData(0, 0, App.docW, App.docH);
+  const src = new Uint8ClampedArray(img.data);
+  const d = img.data, w = App.docW, h = App.docH;
+  for (let y = 1; y < h - 1; y++) for (let x = 1; x < w - 1; x++) {
+    for (let c = 0; c < 3; c++) {
+      let sum = 0, ki = 0;
+      for (let dy = -1; dy <= 1; dy++) for (let dx = -1; dx <= 1; dx++)
+        sum += src[((y + dy) * w + (x + dx)) * 4 + c] * k[ki++];
+      d[(y * w + x) * 4 + c] = clamp(sum + offset, 0, 255);
+    }
+  }
+  layer.ctx.putImageData(img, 0, 0);
+}
+function applyEmboss() { withLayer("Emboss", l => convolve3x3(l, [-2, -1, 0, -1, 1, 1, 0, 1, 2], 128)); }
+function applyFindEdges() { withLayer("Find Edges", l => convolve3x3(l, [-1, -1, -1, -1, 8, -1, -1, -1, -1], 0)); }
+function dialogMosaic() {
+  const l = activeLayer();
+  if (!l || l.locked) return toast("Lapisan terkunci / tidak ada", true);
+  const orig = cloneCanvas(l.canvas);
+  showModal("Mosaic (Pikselasi)", `
+    <label class="adj-label">Ukuran ubin <span class="adj-val" id="adjv-m">12</span>
+      <input type="range" id="adj-m" min="2" max="64" value="12">
+    </label>`, [
+    { label: "Batal", onClick: () => { l.ctx.clearRect(0, 0, App.docW, App.docH); l.ctx.drawImage(orig, 0, 0); App.dirty = true; } },
+    { label: "Oke", primary: true, onClick: () => { pushHistory("Mosaic"); updateLayerThumbs(); } },
+  ]);
+  $("#adj-m").addEventListener("input", e => {
+    $("#adjv-m").textContent = e.target.value;
+    const px = +e.target.value, w = App.docW, h = App.docH;
+    const small = document.createElement("canvas");
+    small.width = Math.max(1, Math.round(w / px)); small.height = Math.max(1, Math.round(h / px));
+    small.getContext("2d").drawImage(orig, 0, 0, small.width, small.height);
+    l.ctx.imageSmoothingEnabled = false;
+    l.ctx.clearRect(0, 0, w, h);
+    l.ctx.drawImage(small, 0, 0, w, h);
+    l.ctx.imageSmoothingEnabled = true;
+    App.dirty = true;
+  });
+}
+function dialogLevels() {
+  openAdjustDialog("Levels", [
+    { id: "bp", label: "Titik Hitam", min: 0, max: 250, value: 0 },
+    { id: "wp", label: "Titik Putih", min: 5, max: 255, value: 255 },
+    { id: "gm", label: "Gamma (x10)", min: 2, max: 30, value: 10 },
+  ], (orig, v, l) => {
+    const out = l.ctx.createImageData(orig.width, orig.height);
+    const s = orig.data, d = out.data;
+    const span = Math.max(1, v.wp - v.bp), gamma = v.gm / 10;
+    for (let i = 0; i < s.length; i += 4) {
+      for (let c = 0; c < 3; c++) {
+        let x = clamp((s[i + c] - v.bp) * 255 / span, 0, 255);
+        d[i + c] = clamp(255 * Math.pow(x / 255, 1 / gamma), 0, 255);
+      }
+      d[i + 3] = s[i + 3];
+    }
+    l.ctx.putImageData(out, 0, 0);
+  });
+}
+
+/* ================= PROJECT FILE ================= */
+function loadImage(src) {
+  return new Promise((res, rej) => { const i = new Image(); i.onload = () => res(i); i.onerror = rej; i.src = src; });
+}
+async function saveProject() {
+  const data = {
+    v: 1, w: App.docW, h: App.docH,
+    activeIndex: Math.max(0, layerIndex(App.activeLayerId)),
+    layers: App.layers.map(l => ({
+      name: l.name, visible: l.visible, opacity: l.opacity, locked: l.locked,
+      blendMode: l.blendMode, data: l.canvas.toDataURL("image/png"),
+    })),
+  };
+  const blob = new Blob([JSON.stringify(data)], { type: "application/json" });
+  const a = document.createElement("a");
+  a.download = "proyek-pslite.json";
+  a.href = URL.createObjectURL(blob);
+  a.click();
+  setTimeout(() => URL.revokeObjectURL(a.href), 3000);
+  toast("Proyek disimpan (bisa dibuka lagi dengan semua lapisan)");
+}
+async function openProjectFile(file) {
+  try {
+    const data = JSON.parse(await file.text());
+    if (!data.layers || !data.w) throw new Error("format");
+    const layers = [];
+    for (const sl of data.layers) {
+      const img = await loadImage(sl.data);
+      const c = document.createElement("canvas");
+      c.width = data.w; c.height = data.h;
+      c.getContext("2d").drawImage(img, 0, 0);
+      layers.push({
+        id: uid(), name: sl.name, visible: sl.visible, opacity: sl.opacity,
+        locked: sl.locked, blendMode: sl.blendMode || "source-over", canvas: c, ctx: makeCtx(c),
+      });
+    }
+    App.docW = data.w; App.docH = data.h;
+    ensureComposite();
+    App.layers = layers;
+    App.activeLayerId = (layers[clamp(data.activeIndex || 0, 0, layers.length - 1)] || layers[0]).id;
+    App.selection = null; App.cropRect = null; App.floatSel = null; App.transform = null;
+    App.history = []; App.historyIndex = -1;
+    pushHistory("Buka Proyek");
+    fitView(); updateUI();
+    $("#empty-hint").classList.add("hide");
+    toast("Proyek dibuka: " + file.name);
+  } catch (err) {
+    toast("File proyek rusak / format tidak dikenal", true);
+  }
+}
+
 /* ================= FILE OPS ================= */
 function newDocDialog() {
   showModal("Dokumen Baru", `
@@ -1168,6 +1579,9 @@ const MENUS = {
     { sep: 1 },
     { label: "Simpan sebagai PNG", sc: "Ctrl+S", fn: savePNG },
     { label: "Simpan sebagai JPEG", fn: saveJPEG },
+    { sep: 1 },
+    { label: "Simpan Proyek (dengan lapisan)…", fn: saveProject },
+    { label: "Buka Proyek…", fn: () => $("#proj-input").click() },
   ],
   Edit: [
     { label: "Urungkan", sc: "Ctrl+Z", fn: undo },
@@ -1181,6 +1595,11 @@ const MENUS = {
     { label: "Batalkan Pilihan", sc: "Ctrl+D", fn: deselect },
   ],
   Gambar: [
+    { label: "Putar 90° Searah Jarum", fn: () => rotateFlip("cw") },
+    { label: "Putar 90° Berlawanan", fn: () => rotateFlip("ccw") },
+    { label: "Cermin Horizontal", fn: () => rotateFlip("fh") },
+    { label: "Cermin Vertikal", fn: () => rotateFlip("fv") },
+    { sep: 1 },
     { label: "Ukuran Gambar…", fn: dialogResize },
     { sep: 1 },
     { label: "Ratakan Gambar", fn: flattenImage },
@@ -1189,6 +1608,10 @@ const MENUS = {
     { label: "Blur…", fn: dialogBlur },
     { label: "Blur Cepat", fn: () => applyBlur(2) },
     { label: "Perjelas (Sharpen)", fn: applySharpen },
+    { sep: 1 },
+    { label: "Mosaic (Pikselasi)…", fn: dialogMosaic },
+    { label: "Emboss", fn: applyEmboss },
+    { label: "Find Edges", fn: applyFindEdges },
     { sep: 1 },
     { label: "Invert", sc: "Ctrl+I", fn: applyInvert },
     { label: "Grayscale", fn: applyGrayscale },
@@ -1275,7 +1698,7 @@ function buildToolbar() {
   Object.entries(TOOLS).forEach(([id, t]) => {
     const b = document.createElement("button");
     b.className = "tool-btn" + (App.tool === id ? " active" : "");
-    b.textContent = t.icon;
+    b.innerHTML = `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round">${t.svg}</svg>`;
     b.title = `${t.label} (${t.key})`;
     b.dataset.tool = id;
     b.addEventListener("click", () => setTool(id));
@@ -1297,6 +1720,15 @@ function updateOptionsBar() {
   const bar = $("#optionsbar");
   const t = App.tool;
   let html = `<span class="tool-name">${TOOLS[t].label}</span>`;
+  if (App.transform) {
+    html += `<button class="opt-btn primary" id="ob-tf-ok">✓ Selesai (Enter)</button>
+             <button class="opt-btn" id="ob-tf-cancel">✕ Batal (Esc)</button>
+             <label style="color:var(--text2)">Seret sudut = skala • dalam kotak = pindah • luar = putar</label>`;
+    bar.innerHTML = html;
+    $("#ob-tf-ok").addEventListener("click", commitTransform);
+    $("#ob-tf-cancel").addEventListener("click", cancelTransform);
+    return;
+  }
   const slider = (id, label, min, max, val, unit = "") =>
     `<label>${label}<input type="range" id="ob-${id}" min="${min}" max="${max}" value="${val}"><span class="val" id="obv-${id}">${val}${unit}</span></label>`;
 
@@ -1306,6 +1738,16 @@ function updateOptionsBar() {
     html += slider("hard", "Kekerasan", 0, 100, App.hardness, "%");
   } else if (t === "bucket") {
     html += slider("tol", "Toleransi", 0, 100, App.bucketTolerance);
+  } else if (t === "gradient") {
+    html += `<label>Jenis
+      <select id="ob-gradmode">
+        <option value="fgt" ${App.gradMode === "fgt" ? "selected" : ""}>Warna Depan → Transparan</option>
+        <option value="fgbg" ${App.gradMode === "fgbg" ? "selected" : ""}>Warna Depan → Belakang</option>
+      </select></label>`;
+    html += slider("op", "Opasitas", 1, 100, App.toolOpacity, "%");
+    html += `<label style="color:var(--text2)">Seret garis di kanvas</label>`;
+  } else if (t === "lasso") {
+    html += `<label style="color:var(--text2)">Gambar bebas mengelilingi area, otomatis tertutup</label>`;
   } else if (t === "text") {
     html += `<label>Font
       <select id="ob-font">
@@ -1317,8 +1759,9 @@ function updateOptionsBar() {
     html += `<label class="chk"><input type="checkbox" id="ob-fit" ${App.fontItalic ? "checked" : ""}>Miring</label>`;
   } else if (t === "shape") {
     html += `<div class="radio-group" id="ob-shapetype">
-      <button data-v="rect" class="${App.shapeType === "rect" ? "on" : ""}">▭ Persegi</button>
-      <button data-v="ellipse" class="${App.shapeType === "ellipse" ? "on" : ""}">◯ Lingkaran</button>
+      <button data-v="rect" class="${App.shapeType === "rect" ? "on" : ""}">▭</button>
+      <button data-v="ellipse" class="${App.shapeType === "ellipse" ? "on" : ""}">◯</button>
+      <button data-v="line" class="${App.shapeType === "line" ? "on" : ""}">／</button>
     </div>`;
     html += `<div class="radio-group" id="ob-shapemode">
       <button data-v="fill" class="${App.shapeMode === "fill" ? "on" : ""}">Isi</button>
@@ -1358,6 +1801,7 @@ function updateOptionsBar() {
   };
   s("size", "brushSize", "px"); s("op", "toolOpacity", "%"); s("hard", "hardness", "%"); s("tol", "bucketTolerance");
   const f = $("#ob-font"); if (f) f.addEventListener("change", () => App.fontFamily = f.value);
+  const gm = $("#ob-gradmode"); if (gm) gm.addEventListener("change", () => App.gradMode = gm.value);
   const fs = $("#ob-fsize"); if (fs) fs.addEventListener("change", () => App.fontSize = clamp(+fs.value, 6, 400));
   const fb = $("#ob-fbold"); if (fb) fb.addEventListener("change", () => App.fontBold = fb.checked);
   const fi = $("#ob-fit"); if (fi) fi.addEventListener("change", () => App.fontItalic = fi.checked);
@@ -1429,6 +1873,7 @@ function buildAdjustGrid() {
   const items = [
     ["Kecerahan / Kontras", dialogBrightnessContrast],
     ["Rona / Saturasi", dialogHueSaturation],
+    ["Levels", dialogLevels],
     ["Blur", dialogBlur],
     ["Perjelas", applySharpen],
     ["Invert", applyInvert],
@@ -1454,11 +1899,11 @@ function renderLayerList() {
   rev.forEach(l => {
     const row = document.createElement("div");
     row.className = "layer-row" + (l.id === App.activeLayerId ? " active" : "");
-    row.innerHTML = `
-      <button class="eye ${l.visible ? "" : "off"}" title="Visibilitas">${l.visible ? "👁" : "—"}</button>
+      row.innerHTML = `
+      <button class="eye ${l.visible ? "" : "off"}" title="Visibilitas">${l.visible ? "◉" : "○"}</button>
       <canvas width="44" height="33"></canvas>
       <div class="lname">${l.name}</div>
-      <button class="lock ${l.locked ? "on" : ""}" title="Kunci">${l.locked ? "🔒" : "🔓"}</button>`;
+      <button class="lock ${l.locked ? "on" : ""}" title="Kunci">${l.locked ? "■" : "□"}</button>`;
     const c = row.querySelector("canvas");
     const cc = c.getContext("2d");
     const scale = Math.min(44 / App.docW, 33 / App.docH);
@@ -1581,6 +2026,9 @@ document.addEventListener("keydown", e => {
     if (k === "i") { e.preventDefault(); applyInvert(); return; }
     if (k === "e") { e.preventDefault(); mergeDown(); return; }
     if (e.key === "Backspace" || e.key === "Delete") { e.preventDefault(); fillWith(App.secondary, false); return; }
+    if (k === "t") { e.preventDefault(); startTransform(); return; }
+    if (k === "l") { e.preventDefault(); dialogLevels(); return; }
+    if (k === "u") { e.preventDefault(); dialogHueSaturation(); return; }
     if (k === "0") { e.preventDefault(); fitView(); return; }
     if (k === "1") { e.preventDefault(); zoomAt(1 / App.zoom, viewport.clientWidth / 2, viewport.clientHeight / 2); return; }
     if (k === "=" || k === "+") { e.preventDefault(); zoomAt(1.25, viewport.clientWidth / 2, viewport.clientHeight / 2); return; }
@@ -1588,6 +2036,7 @@ document.addEventListener("keydown", e => {
     return;
   }
   if (e.key === "Escape") {
+    if (App.transform) { cancelTransform(); return; }
     if (App.cropRect) { App.cropRect = null; updateOptionsBar(); App.dirty = true; }
     if (App.floatSel) {
       const l = activeLayer();
@@ -1603,7 +2052,10 @@ document.addEventListener("keydown", e => {
     else clearAction();
     return;
   }
-  if (e.key === "Enter" && App.cropRect) { applyCrop(); return; }
+  if (e.key === "Enter") {
+    if (App.transform) { commitTransform(); return; }
+    if (App.cropRect) { applyCrop(); return; }
+  }
 
   const k = e.key.toLowerCase();
   if (k === "x") { [App.color, App.secondary] = [App.secondary, App.color]; updateColorUI(); return; }
@@ -1634,6 +2086,11 @@ function init() {
   $("#file-input").addEventListener("change", e => {
     const f = e.target.files[0];
     if (f) openImageFile(f);
+    e.target.value = "";
+  });
+  $("#proj-input").addEventListener("change", e => {
+    const f = e.target.files[0];
+    if (f) openProjectFile(f);
     e.target.value = "";
   });
 
