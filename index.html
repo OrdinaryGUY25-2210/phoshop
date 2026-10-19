@@ -44,8 +44,10 @@
       </div>
     </div>
 
+    <div id="split-right" title="Geser: ubah lebar panel — klik dua kali: reset"></div>
+
     <aside id="panels">
-      <section class="panel">
+      <section class="panel" data-panel="color">
         <h3>Warna</h3>
         <div class="panel-body" id="color-body">
           <div class="color-row">
@@ -62,21 +64,25 @@
         </div>
       </section>
 
-      <section class="panel">
+      <section class="panel" data-panel="brush">
         <h3>Kuas Komik (Webtoon)</h3>
         <div class="panel-body">
+          <div class="brush-filters">
+            <input type="search" id="brush-search" placeholder="Cari kuas / kategori…" autocomplete="off">
+            <div class="chips" id="brush-cats"></div>
+          </div>
           <div id="brush-grid" class="brush-grid"></div>
         </div>
       </section>
 
-      <section class="panel">
+      <section class="panel" data-panel="adjust">
         <h3>Penyesuaian &amp; Filter</h3>
         <div class="panel-body">
           <div id="adjust-grid" class="btn-grid"></div>
         </div>
       </section>
 
-      <section class="panel panel-layers">
+      <section class="panel panel-layers" data-panel="layers">
         <h3>Lapisan</h3>
         <div class="panel-body">
           <div class="layer-controls">
@@ -117,7 +123,7 @@
         </div>
       </section>
 
-      <section class="panel panel-history">
+      <section class="panel panel-history" data-panel="history">
         <h3>Riwayat</h3>
         <div class="panel-body">
           <div id="history-list"></div>

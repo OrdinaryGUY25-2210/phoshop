@@ -11,7 +11,8 @@ Aplikasi editor foto **satu codebase untuk 3 platform**:
 ## Fitur lengkap
 
 - **Tools (kiri):** Pindah, Kotak Pilih (seleksi), **Lasso**, Pangkas, Kuas, Penghapus, Ember Cat (toleransi), **Gradasi**, Penetes Warna, Teks (font/tebal/miring), Bentuk (persegi/lingkaran/garis — isi/tepi), Zoom, Tangan
-- **Kuas Komik / Webtoon (panel Kanan):** 20 preset — G-Pen, Mapping Pen, R-Pen Maru, Brush Pen, Tinta Air, Pensil, Cat Air, Airbrush, Arang, **Screentone** (titik besar/sedang/halus, garis, silang — pola sejajar dokumen), **Speed Lines**, Kilau/Star, Cipratan, Asap/Kabut, Gores Abstrak, Cahaya Lembut. Tekanan stylus (Pointer Events) didukung untuk pena ± tipis.
+- **Kuas Komik / Webtoon (panel Kanan):** **44 preset** — Pena Komik (G-Pen, Mapping, R-Pen Maru, Brush Pen, Tinta Air, Pena Bulu, Pena Kering, Tinta Cepat, Tinta Tebal, Fineliner), Tekstur (Pensil, Cat Air, Airbrush, Arang, Pastel, Krayon, Spons, Kuas Kering, Kapur), **Screentone** (titik besar/sedang/halus/45°/rapat/jumbo, garis, garis tegak, silang, kisi, bintik — pola sejajar dokumen), **Efek Webtoon** (Speed Lines, Garis Vertikal, Kilau/Star, Kilau Bintang, Cipratan, Cipratan Besar, Ledakan, Kilat, Bintik Cahaya, Asap/Kabut, Asap Tebal, Gores Abstrak, Goresan Emosi, Cahaya Lembut) + **pencarian & filter kategori**. Tekanan stylus (Pointer Events) didukung untuk pena ± tipis.
+- **Panel fleksibel:** seret pembatas antara kanvas & panel untuk mengubah lebar (tersimpan otomatis); klik judul panel untuk buka/tutup; **klik dua kali judul = mode solo** (panel itu mendominasi, panel lain dilipat); reset lebar via klik dua kali pembatas atau **Tampilan → Panel: Reset Lebar**.
 - **Lapisan:** tambah, duplikat, hapus, naik/turun, gabung ke bawah, ratakan, visibilitas, kunci, opasitas, 16 mode blend, rename, **folder (grup/ungroup)**: buat folder, masukkan lapisan, **lepas satu per satu (⊟)**, buka/tutup, sembunyikan seluruh folder (ikut ekspor PSD). **Setiap teks otomatis jadi lapisan sendiri** ("Teks: …") sehingga bisa dipindah/di-ungroup per item.
 - **Penyesuaian (preview langsung):** Kecerahan/Kontras, Rona/Saturasi/Cahaya, **Levels**
 - **Filter:** Blur, Blur Cepat, Perjelas, Invert, Grayscale, Sepia, Noise, **Mosaic, Emboss, Find Edges**
@@ -84,7 +85,7 @@ photoshop-lite/
 ├── index.html            # UI utama
 ├── style.css             # tema gelap + responsif (desktop & mobile)
 ├── app.js                # engine editor (tools, lapisan, folder, filter, riwayat, touch)
-├── brushes.js            # engine brush komik/webtoon + 20 preset
+├── brushes.js            # engine brush komik/webtoon + 44 preset
 ├── psd.js                # penulis file PSD 8/16-bit (lapisan + folder, PackBits RLE)
 ├── manifest.webmanifest  # manifest PWA
 ├── sw.js                 # service worker (offline)

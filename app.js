@@ -16,6 +16,10 @@ const App = {
   brushPreset: BRUSH_PRESETS[0],
   customFonts: [],
   snap: true,
+  brushCat: "Semua",
+  brushQuery: "",
+  panelLayout: null,
+  resizing: null,
   bucketTolerance: 32,
   shapeType: "rect", shapeMode: "fill",
   gradMode: "fgt",
@@ -1765,6 +1769,9 @@ const MENUS = {
     { label: () => (App.snap ? "✓ " : "   ") + "Snap (Tepi & Tengah Kanvas)", fn: () => { App.snap = !App.snap; buildMenus(); toast("Snap " + (App.snap ? "aktif" : "mati")); } },
     { sep: 1 },
     { label: () => (document.body.classList.contains("tab-mode") ? "✓ " : "   ") + "Mode Fokus (Tab)", sc: "Tab", fn: toggleTabMode },
+    { sep: 1 },
+    { label: "Panel: Reset Lebar", fn: () => { setPanelsWidth(288); savePanelLayout(); toast("Lebar panel direset (288 px)"); } },
+    { label: "Panel: Buka Semua", fn: () => { App.panelLayout.collapsed = []; App.panelLayout.solo = null; applyPanelLayout(); savePanelLayout(); toast("Semua panel dibuka"); } },
   ],
   Font: [
     { label: "Tambah Font dari File…", fn: () => $("#font-input").click() },
@@ -1905,6 +1912,7 @@ function helpGuideDialog() {
     <p><b>Snap (menempel)</b> — aktif secara baku, bisa dimatikan di <b>Tampilan → Snap</b>. Saat menggeser lapisan/seleksi dan menggambar bentuk, tepi &amp; titik tengah objek menempel ke <b>tepi kanvas</b>, <b>titik tengah</b>, dan garis grid (bila Grid aktif). Toleransi 6 px di layar.</p>
     <p style="margin-top:8px"><b>Mode Fokus (Tab)</b> — tekan <b>Tab</b> untuk menyembunyikan menu, tool bar, options bar, dan semua panel agar kanvas penuh; tekan Tab lagi untuk kembali.</p>
     <p style="margin-top:8px"><b>Ungroup per item</b> — di panel Lapisan pilih lapisan anggota folder lalu tekan tombol <b>⊟ (Ungroup)</b>; hanya lapisan itu yang keluar dari folder. Setiap teks kini dibuat sebagai <b>lapisan sendiri</b> ("Teks: …") sehingga bisa dipindah/ungroup satu per satu. <b>⊞</b> menggabungkan lapisan terpilih jadi folder baru, <b>▤</b> membuat folder kosong.</p>
+    <p style="margin-top:8px"><b>Tata letak panel</b> — seret garis pembatas di kiri panel untuk mengatur lebarnya (tersimpan otomatis; klik dua kali pembatas untuk reset). Klik judul panel untuk melipat/membuka, dan <b>klik dua kali judul</b> untuk <b>mode solo</b>: panel itu mendominasi layar dan panel lain dilipat. Menu <b>Tampilan → Panel</b> punya reset lebar &amp; buka semua.</p>
     <p style="margin-top:8px"><b>PSD 16-bit</b> — <b>Berkas → Ekspor sebagai PSD 16-bit</b> menulis 16 bit per kanal (nilai 8-bit diperhalus ke rentang 0–65535), cocok untuk cetak &amp; grading lanjutan; semua lapisan, folder, opasitas, mode campuran, dan visibilitas tetap ikut. Ukuran file ±2× PSD 8-bit.</p>
     <p style="margin-top:8px"><b>Font</b> — lihat menu <b>Font → Panduan Font</b> untuk cara menambah font di dalam aplikasi maupun permanen melalui folder <code>fonts/</code>.</p>`);
 }
@@ -2159,11 +2167,30 @@ function selectBrushPreset(id) {
   markBrushPreset();
   toast("Kuas: " + p.name);
 }
+function buildBrushCats() {
+  const box = $("#brush-cats");
+  if (!box) return;
+  const cats = ["Semua", ...new Set(BRUSH_PRESETS.map(p => p.cat))];
+  box.innerHTML = "";
+  cats.forEach(cat => {
+    const b = document.createElement("button");
+    b.className = "chip" + (App.brushCat === cat ? " on" : "");
+    b.textContent = cat + (cat === "Semua" ? " (" + BRUSH_PRESETS.length + ")" : "");
+    b.addEventListener("click", () => { App.brushCat = cat; buildBrushCats(); buildBrushPanel(); });
+    box.appendChild(b);
+  });
+}
 function buildBrushPanel() {
   const box = $("#brush-grid");
   if (!box) return;
   box.innerHTML = "";
-  BRUSH_PRESETS.forEach(p => {
+  const q = App.brushQuery.trim().toLowerCase();
+  const list = BRUSH_PRESETS.filter(p =>
+    (App.brushCat === "Semua" || p.cat === App.brushCat) &&
+    (!q || p.name.toLowerCase().includes(q) || p.cat.toLowerCase().includes(q) || p.id.includes(q))
+  );
+  if (!list.length) { box.innerHTML = `<div class="brush-empty">Tidak ada kuas yang cocok.</div>`; return; }
+  list.forEach(p => {
     const b = document.createElement("button");
     b.className = "brush-item" + (App.brushPreset === p ? " on" : "");
     b.dataset.id = p.id;
@@ -2173,6 +2200,78 @@ function buildBrushPanel() {
     b.addEventListener("click", () => selectBrushPreset(p.id));
     box.appendChild(b);
   });
+}
+
+/* ================= UI: TATA LETAK PANEL ================= */
+const PANEL_LAYOUT_KEY = "pslite.panelLayout";
+function loadPanelLayout() {
+  try { return JSON.parse(localStorage.getItem(PANEL_LAYOUT_KEY) || "{}") || {}; } catch (e) { return {}; }
+}
+function savePanelLayout() {
+  try { localStorage.setItem(PANEL_LAYOUT_KEY, JSON.stringify(App.panelLayout || {})); } catch (e) {}
+}
+function setPanelsWidth(w) {
+  const max = Math.max(240, Math.round(window.innerWidth * 0.62));
+  const v = clamp(Math.round(w), 210, max);
+  App.panelLayout.w = v;
+  $("#app").style.setProperty("--panels-w", v + "px");
+  return v;
+}
+function applyPanelLayout() {
+  const L = App.panelLayout || (App.panelLayout = {});
+  setPanelsWidth(L.w || 288);
+  $$("#panels .panel").forEach(p => {
+    const key = p.dataset.panel;
+    const collapsed = L.solo ? L.solo !== key : (L.collapsed || []).includes(key);
+    p.classList.toggle("collapsed", collapsed);
+    p.classList.toggle("solo", L.solo === key);
+  });
+}
+function togglePanelSolo(key) {
+  const L = App.panelLayout;
+  if (L.solo === key) { L.collapsed = L.prevCollapsed || []; L.solo = null; }
+  else { L.prevCollapsed = [...(L.collapsed || [])]; L.solo = key; }
+  applyPanelLayout(); savePanelLayout();
+}
+function initPanelLayout() {
+  App.panelLayout = loadPanelLayout();
+  applyPanelLayout();
+  $$("#panels .panel").forEach(p => {
+    const key = p.dataset.panel;
+    const h = p.querySelector("h3");
+    h.title = "Klik: buka/tutup — klik dua kali: solo panel ini";
+    h.addEventListener("click", () => {
+      const L = App.panelLayout;
+      if (L.solo === key) { togglePanelSolo(key); return; }
+      L.collapsed = L.collapsed || [];
+      const i = L.collapsed.indexOf(key);
+      if (i >= 0) L.collapsed.splice(i, 1); else L.collapsed.push(key);
+      applyPanelLayout(); savePanelLayout();
+    });
+    h.addEventListener("dblclick", e => { e.preventDefault(); togglePanelSolo(key); });
+  });
+  const sp = $("#split-right"), box = $("#panels");
+  if (!sp || !box) return;
+  sp.addEventListener("pointerdown", e => {
+    e.preventDefault();
+    try { sp.setPointerCapture(e.pointerId); } catch (err) {}
+    App.resizing = { x: e.clientX, w: box.getBoundingClientRect().width };
+    document.body.classList.add("col-resize");
+  });
+  sp.addEventListener("pointermove", e => {
+    if (!App.resizing) return;
+    setPanelsWidth(App.resizing.w + (App.resizing.x - e.clientX));
+  });
+  const end = () => {
+    if (!App.resizing) return;
+    App.resizing = null;
+    document.body.classList.remove("col-resize");
+    savePanelLayout();
+  };
+  sp.addEventListener("pointerup", end);
+  sp.addEventListener("pointercancel", end);
+  sp.addEventListener("dblclick", () => { setPanelsWidth(288); savePanelLayout(); toast("Lebar panel direset (288 px)"); });
+  window.addEventListener("resize", () => { if (!App.resizing) setPanelsWidth(App.panelLayout.w || 288); });
 }
 
 function renderLayerList() {
@@ -2381,7 +2480,11 @@ function init() {
   buildToolbar();
   buildPalette();
   buildAdjustGrid();
+  buildBrushCats();
   buildBrushPanel();
+  initPanelLayout();
+  const bs = $("#brush-search");
+  if (bs) bs.addEventListener("input", () => { App.brushQuery = bs.value; buildBrushPanel(); });
   bindColorUI();
   bindLayerUI();
   updateColorUI();

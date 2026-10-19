@@ -1,4 +1,4 @@
-const CACHE = "pslite-v4";
+const CACHE = "pslite-v5";
 const ASSETS = [
   ".",
   "index.html",
