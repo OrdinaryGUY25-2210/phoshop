@@ -107,6 +107,8 @@ const composite = document.createElement("canvas"), cctx = composite.getContext(
 const strokeCanvas = document.createElement("canvas"), sctx = strokeCanvas.getContext("2d", { willReadFrequently: true });
 const gradCanvas = document.createElement("canvas"), grctx = gradCanvas.getContext("2d");
 let checkerPattern = null;
+/* Titik sambung fitur lanjutan (diisi oleh ext-*.js) */
+const EXT = {};
 
 /* ================= UTIL ================= */
 function hexToRgb(hex) {
@@ -182,15 +184,19 @@ function createLayer(name, w = App.docW, h = App.docH) {
     id: uid(), name, canvas, ctx: makeCtx(canvas),
     visible: true, opacity: 100, locked: false, blendMode: "source-over",
     isGroup: false, group: null, expanded: true,
+    maskOn: true, adj: null, clip: false,
   };
 }
 function activeLayer() { return App.layers.find(l => l.id === App.activeLayerId) || null; }
 function layerIndex(id) { return App.layers.findIndex(l => l.id === id); }
 function isLayerVisible(l) {
   if (!l.visible) return false;
-  if (l.group) {
-    const g = App.layers.find(x => x.id === l.group);
-    if (g && !g.visible) return false;
+  let gid = l.group, depth = 0;
+  while (gid && depth++ < 32) {
+    const g = App.layers.find(x => x.id === gid);
+    if (!g) break;
+    if (!g.visible) return false;
+    gid = g.group;
   }
   return true;
 }
@@ -211,7 +217,7 @@ function deleteLayer() {
   const l = App.layers[i];
   if (l.locked) return toast("Lapisan terkunci", true);
   if (l.isGroup) {
-    App.layers.filter(m => m.group === l.id).forEach(m => m.group = null);
+    App.layers.filter(m => m.group === l.id).forEach(m => m.group = l.group || null);
     App.layers.splice(i, 1);
     App.activeLayerId = App.layers[Math.max(0, i - 1)].id;
     pushHistory("Hapus Folder"); updateUI();
@@ -225,6 +231,8 @@ function deleteLayer() {
 function newGroup() {
   const g = createLayer(`Folder ${App.layers.filter(l => l.isGroup).length + 1}`);
   g.isGroup = true;
+  const a = activeLayer();
+  if (a) g.group = a.isGroup ? a.id : (a.group || null);
   const i = layerIndex(App.activeLayerId);
   App.layers.splice(clamp(i + 1, 0, App.layers.length), 0, g);
   App.activeLayerId = g.id;
@@ -232,10 +240,9 @@ function newGroup() {
 }
 function groupSelected() {
   const l = activeLayer(); if (!l) return;
-  if (l.isGroup) return toast("Sudah folder", true);
-  if (l.group) return toast("Sudah berada di folder", true);
   const g = createLayer(`Folder ${App.layers.filter(x => x.isGroup).length + 1}`);
   g.isGroup = true;
+  g.group = l.group || null;
   App.layers.splice(layerIndex(l.id), 0, g);
   l.group = g.id;
   pushHistory("Kelompokkan"); updateUI();
@@ -246,7 +253,7 @@ function ungroupSelected() {
     const i = layerIndex(l.id);
     App.layers.splice(i, 1);
     const members = App.layers.filter(m => m.group === l.id);
-    members.forEach(m => m.group = null);
+    members.forEach(m => m.group = l.group || null);
     App.activeLayerId = members.length ? members[0].id : App.layers[Math.max(0, i - 1)].id;
     pushHistory("Lepas Folder"); updateUI();
     toast("Folder dilepas — lapisan tetap ada");
@@ -314,6 +321,9 @@ function snapshot() {
       style: l.style ? JSON.parse(JSON.stringify(l.style)) : null,
       text: l.text ? JSON.parse(JSON.stringify(l.text)) : null,
       mask: l.mask ? cloneCanvas(l.mask) : null,
+      maskOn: l.maskOn !== false,
+      adj: l.adj ? JSON.parse(JSON.stringify(l.adj)) : null,
+      clip: !!l.clip,
     })),
   };
 }
@@ -338,6 +348,9 @@ function jumpTo(i) {
     style: sl.style ? JSON.parse(JSON.stringify(sl.style)) : null,
     text: sl.text ? JSON.parse(JSON.stringify(sl.text)) : null,
     mask: sl.mask ? cloneCanvas(sl.mask) : null,
+    maskOn: sl.maskOn !== false,
+    adj: sl.adj ? JSON.parse(JSON.stringify(sl.adj)) : null,
+    clip: !!sl.clip,
   }));
   App.activeLayerId = (App.layers.some(x => x.id === s.activeLayerId) ? s.activeLayerId : (App.layers[0] && App.layers[0].id));
   App.selection = null; App.cropRect = null; App.floatSel = null;
@@ -361,7 +374,14 @@ function initChecker() {
   checkerPattern = vctx.createPattern(p, "repeat");
 }
 function screenToDoc(sx, sy) {
-  return { x: (sx - App.panX) / App.zoom, y: (sy - App.panY) / App.zoom };
+  let dx = (sx - App.panX) / App.zoom, dy = (sy - App.panY) / App.zoom;
+  if (App.viewRot) {
+    const cx = App.docW / 2, cy = App.docH / 2, a = -App.viewRot;
+    const ox = dx - cx, oy = dy - cy;
+    dx = cx + ox * Math.cos(a) - oy * Math.sin(a);
+    dy = cy + ox * Math.sin(a) + oy * Math.cos(a);
+  }
+  return { x: dx, y: dy };
 }
 function fitView() {
   const vw = viewport.clientWidth, vh = viewport.clientHeight;
@@ -393,6 +413,11 @@ function render() {
   ctx.save();
   ctx.translate(App.panX, App.panY);
   ctx.scale(App.zoom, App.zoom);
+  if (App.viewRot) {
+    ctx.translate(App.docW / 2, App.docH / 2);
+    ctx.rotate(App.viewRot);
+    ctx.translate(-App.docW / 2, -App.docH / 2);
+  }
 
   // checkerboard + composite
   ctx.fillStyle = checkerPattern || "#888";
@@ -404,6 +429,7 @@ function render() {
     if (l.isGroup || !isLayerVisible(l)) continue;
     cctx.globalAlpha = l.opacity / 100;
     cctx.globalCompositeOperation = l.blendMode;
+    if (EXT.drawLayer && EXT.drawLayer(cctx, l)) continue;
     drawLayerStyled(cctx, l);
   }
   cctx.globalAlpha = 1; cctx.globalCompositeOperation = "source-over";
@@ -457,6 +483,7 @@ function render() {
   else if (App.selection && !App.floatSel) drawMarchingAnts(ctx, App.selection);
   if (App.cropRect) drawCropRect(ctx);
   if (App.transform) drawTransformOverlay(ctx);
+  if (EXT.overlayDoc) EXT.overlayDoc(ctx);
 
   ctx.restore();
 
@@ -469,6 +496,7 @@ function render() {
     ctx.strokeStyle = "rgba(0,0,0,.6)";
     ctx.beginPath(); ctx.arc(App.mouse.x, App.mouse.y, Math.max(2, r) + 1, 0, Math.PI * 2); ctx.stroke();
   }
+  if (EXT.overlayScreen) EXT.overlayScreen(ctx, vw, vh);
   App.dirty = false;
 }
 function drawMarchingAnts(ctx, r) {
@@ -853,7 +881,15 @@ function tfCorners(t) {
     return { x: cx + x * c - y * s + tx, y: cy + x * s + y * c + ty };
   });
 }
-function docToScreen(x, y) { return { x: x * App.zoom + App.panX, y: y * App.zoom + App.panY }; }
+function docToScreen(x, y) {
+  if (App.viewRot) {
+    const cx = App.docW / 2, cy = App.docH / 2, a = App.viewRot;
+    const ox = x - cx, oy = y - cy;
+    x = cx + ox * Math.cos(a) - oy * Math.sin(a);
+    y = cy + ox * Math.sin(a) + oy * Math.cos(a);
+  }
+  return { x: x * App.zoom + App.panX, y: y * App.zoom + App.panY };
+}
 function transformHit(p) {
   const t = App.transform;
   const cs = tfCorners(t).map(c => docToScreen(c.x, c.y));
@@ -1071,6 +1107,7 @@ function cancelStroke() {
 /* ---- tool handlers ---- */
 function toolDown(e, p) {
   if (App.transform) { transformDown(p); return; }
+  if (EXT.toolDown && EXT.toolDown(e, p)) return;
   const d = screenToDoc(p.x, p.y);
   const layer = activeLayer();
   if (layer && layer.isGroup && ["brush", "eraser", "bucket", "gradient", "move", "text", "shape"].includes(App.tool)) {
@@ -1189,6 +1226,7 @@ function toolDown(e, p) {
 
 function toolMove(e, p) {
   if (App.transform) { transformMove(p); return; }
+  if (EXT.toolMove && EXT.toolMove(e, p)) return;
   if (!App.drag && !App.stroke) { App.dirty = true; return; }
   const d = screenToDoc(p.x, p.y);
   const layer = activeLayer();
@@ -1265,6 +1303,7 @@ function toolMove(e, p) {
 
 function toolUp(e, p) {
   if (App.transform) { App.transform.mode = null; return; }
+  if (EXT.toolUp && EXT.toolUp(e, p)) return;
   const layer = activeLayer();
   if (App.stroke && !App.stroke.erase) {
     layer.ctx.globalAlpha = App.toolOpacity / 100;
@@ -2324,6 +2363,8 @@ function serializeProject() {
       text: l.text || null,
       mask: l.mask ? l.mask.toDataURL("image/png") : null,
       maskOn: l.maskOn !== false,
+      adj: l.adj || null,
+      clip: !!l.clip,
       data: l.canvas.toDataURL("image/png"),
     })),
   };
@@ -2347,6 +2388,7 @@ async function applyProjectData(data) {
       locked: !!sl.locked, blendMode: sl.blendMode || "source-over", canvas: c, ctx: makeCtx(c),
       isGroup: !!sl.isGroup, group: null, expanded: sl.expanded !== false,
       style: sl.style || null, text: sl.text || null, mask: null, maskOn: sl.maskOn !== false,
+      adj: sl.adj || null, clip: !!sl.clip,
     };
     if (l.isGroup) { l.style = null; l.text = null; }
     if (sl.mask) {
@@ -2616,6 +2658,7 @@ function compositeToCanvas(whiteBg) {
     if (l.isGroup || !isLayerVisible(l)) continue;
     cc.globalAlpha = l.opacity / 100;
     cc.globalCompositeOperation = l.blendMode;
+    if (EXT.drawLayer && EXT.drawLayer(cc, l)) continue;
     drawLayerStyled(cc, l);
   }
   return c;
@@ -3260,6 +3303,10 @@ function updateOptionsBar() {
     $("#ob-tf-cancel").addEventListener("click", cancelTransform);
     return;
   }
+  if (EXT.optionsBar) {
+    const r = EXT.optionsBar(t);
+    if (r) { bar.innerHTML = `<span class="tool-name">${TOOLS[t].label}</span>` + r.html; r.bind(); return; }
+  }
   const slider = (id, label, min, max, val, unit = "") =>
     `<label>${label}<input type="range" id="ob-${id}" min="${min}" max="${max}" value="${val}"><span class="val" id="obv-${id}">${val}${unit}</span></label>`;
 
@@ -3658,14 +3705,17 @@ function renderLayerList() {
   box.innerHTML = "";
   const rev = [...App.layers].reverse();
   rev.forEach(l => {
-    if (l.group) {
-      const g = App.layers.find(x => x.id === l.group);
-      if (g && g.expanded === false) return;
+    let gid = l.group, depth = 0;
+    while (gid && depth++ < 32) {
+      const g = App.layers.find(x => x.id === gid);
+      if (!g) break;
+      if (g.expanded === false) return;
+      gid = g.group;
     }
     const row = document.createElement("div");
     row.className = "layer-row" + (l.id === App.activeLayerId ? " active" : "") + (l.isGroup ? " folder" : "") + (l.group ? " member" : "");
     const chev = l.isGroup ? `<span class="chev" title="Buka/Tutup">${l.expanded === false ? "▸" : "▾"}</span>` : "";
-    const badges = (l.text ? '<span class="badge tbadge" title="Lapisan teks — klik kanan untuk edit">T</span>' : "")
+    const badges = (typeof extBadges === "function" ? extBadges(l) : "") + (l.text ? '<span class="badge tbadge" title="Lapisan teks — klik kanan untuk edit">T</span>' : "")
       + (l.mask ? `<span class="badge mbadge${l.maskOn === false ? " off" : ""}" title="Mask lapisan">M</span>` : "")
       + (l.style && (l.style.stroke?.on || l.style.shadow?.on || l.style.glow?.on) ? '<span class="badge fbadge" title="Gaya lapisan (Fx)">Fx</span>' : "");
     row.innerHTML = `
@@ -3862,7 +3912,8 @@ document.addEventListener("keydown", e => {
   if (k === "d") { App.color = "#000000"; App.secondary = "#ffffff"; updateColorUI(); return; }
   if (k === "[") { App.brushSize = clamp(App.brushSize - 4, 1, 300); updateOptionsBar(); return; }
   if (k === "]") { App.brushSize = clamp(App.brushSize + 4, 1, 300); updateOptionsBar(); return; }
-  if (TOOLS[k]) setTool(k);
+  const byKey = Object.keys(TOOLS).find(id => TOOLS[id].key && TOOLS[id].key.toLowerCase() === k);
+  if (byKey) setTool(byKey);
 });
 document.addEventListener("keyup", e => {
   if (e.code === "Space") { App.spaceDown = false; viewport.classList.toggle("pan-ready", App.tool === "hand"); }
