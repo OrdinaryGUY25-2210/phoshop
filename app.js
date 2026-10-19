@@ -27,7 +27,7 @@ const App = {
   transform: null,
   gradEnd: null,
   fontFamily: "Arial", fontSize: 42, fontBold: false, fontItalic: false,
-  selection: null, cropRect: null, marqueeDraft: null,
+  selection: null, cropRect: null, marqueeDraft: null, cropRatio: 0,
   tempShape: null, floatSel: null,
   history: [], historyIndex: -1,
   dirty: true,
@@ -72,6 +72,23 @@ const TOOLS = {
 };
 
 const BASE_FONTS = ["Arial", "Georgia", "Times New Roman", "Courier New", "Impact", "Verdana", "Trebuchet MS", "Comic Sans MS", "Segoe UI"];
+const DOC_RATIOS = [
+  { name: "Bebas", r: 0 },
+  { name: "1:1", r: 1 },
+  { name: "4:3", r: 4 / 3 },
+  { name: "3:2", r: 3 / 2 },
+  { name: "16:9", r: 16 / 9 },
+  { name: "9:16", r: 9 / 16 },
+  { name: "3:4", r: 3 / 4 },
+  { name: "2:3", r: 2 / 3 },
+  { name: "A4", r: Math.SQRT1_2 },
+  { name: "A4-L", r: Math.SQRT2 },
+  { name: "Webtoon", r: 800 / 1280 },
+];
+const DOC_PRESETS = [
+  [800, 600], [1280, 720], [1920, 1080], [1080, 1080],
+  [1080, 1920], [800, 1280], [1600, 2560], [2480, 3508], [3508, 2480],
+];
 const PALETTE = [
   "#000000","#434343","#666666","#999999","#b7b7b7","#cccccc","#d9d9d9","#ffffff",
   "#ff0000","#ff9900","#ffff00","#00ff00","#00ffff","#0000ff","#9900ff","#ff00ff",
@@ -919,8 +936,14 @@ function toolMove(e, p) {
     }
     case "crop": {
       const o = App.cropRect;
-      const r0 = normalizeRect(o.x0, o.y0, d.x, d.y);
-      const r = snapRect(r0);
+      let w0 = Math.abs(d.x - o.x0), h0 = Math.abs(d.y - o.y0);
+      let r;
+      if (App.cropRatio > 0 && w0 > 0 && h0 > 0) {
+        if (w0 / h0 > App.cropRatio) w0 = h0 * App.cropRatio; else h0 = w0 / App.cropRatio;
+        r = { x: d.x >= o.x0 ? o.x0 : o.x0 - w0, y: d.y >= o.y0 ? o.y0 : o.y0 - h0, w: w0, h: h0 };
+      } else {
+        r = snapRect(normalizeRect(o.x0, o.y0, d.x, d.y));
+      }
       App.cropRect = { x: r.x, y: r.y, w: r.w, h: r.h, x0: o.x0, y0: o.y0 };
       App.dirty = true;
       break;
@@ -1608,20 +1631,61 @@ async function openProjectFile(file) {
 /* ================= FILE OPS ================= */
 function newDocDialog() {
   showModal("Dokumen Baru", `
+    <div class="field"><label>Preset ukuran</label>
+      <select id="nd-preset">
+        ${DOC_PRESETS.map(([w, h]) => `<option value="${w}x${h}">${w} × ${h}${w === 800 && h === 600 ? " (default)" : ""}</option>`).join("")}
+      </select>
+    </div>
+    <div class="field"><label>Rasio dokumen</label>
+      <div class="chips" id="nd-ratio"></div>
+    </div>
     <div class="field-row">
       <div class="field"><label>Lebar (px)</label><input type="number" id="nd-w" value="800" min="1" max="8000"></div>
       <div class="field"><label>Tinggi (px)</label><input type="number" id="nd-h" value="600" min="1" max="8000"></div>
     </div>
-    <div class="field"><label>Latar belakang</label>
-      <select id="nd-bg"><option value="white">Putih</option><option value="transparent">Transparan</option></select>
-    </div>`, [
+    <div class="field-row" style="align-items:end">
+      <div class="field" style="flex:1"><label>Latar belakang</label>
+        <select id="nd-bg"><option value="white">Putih</option><option value="transparent">Transparan</option></select>
+      </div>
+      <button class="opt-btn" id="nd-swap" style="height:32px" title="Tukar lebar & tinggi (orientasi)">⇄ Tukar L/R</button>
+    </div>
+    <p id="nd-info" style="color:var(--text2);margin-top:8px"></p>`, [
     { label: "Batal", onClick: () => {} },
-    { label: "Buat", primary: true, onClick: close => {
+    { label: "Buat", primary: true, onClick: () => {
       const w = clamp(+$("#nd-w").value || 800, 1, 8000);
       const h = clamp(+$("#nd-h").value || 600, 1, 8000);
-      newDocument(w, h, $("#nd-bg").value);
+      const bg = $("#nd-bg").value;
+      newDocument(w, h, bg);
     }},
   ]);
+  let ratio = 0;
+  const W = $("#nd-w"), H = $("#nd-h"), info = $("#nd-info"), chips = $("#nd-ratio");
+  chips.innerHTML = DOC_RATIOS.map(x => `<button class="chip" data-r="${x.r}">${x.name}</button>`).join("");
+  const mark = () => chips.querySelectorAll(".chip").forEach(b => b.classList.toggle("on", +b.dataset.r === ratio));
+  const updateInfo = () => {
+    const w = +W.value || 0, h = +H.value || 0;
+    const gcd = (a, b) => b ? gcd(b, a % b) : a;
+    const g = w && h ? gcd(w, h) : 1;
+    info.textContent = `Hasil: ${w} × ${h} px` + (w && h ? ` — rasio ${w / g}:${h / g} (${(w / h).toFixed(2)} : 1)` : "");
+  };
+  const fitH = () => { if (ratio > 0) H.value = clamp(Math.round((+W.value || 1) / ratio), 1, 8000); updateInfo(); };
+  const fitW = () => { if (ratio > 0) W.value = clamp(Math.round((+H.value || 1) * ratio), 1, 8000); updateInfo(); };
+  chips.addEventListener("click", e => {
+    const b = e.target.closest(".chip"); if (!b) return;
+    ratio = +b.dataset.r; mark();
+    if (ratio > 0) fitH();
+    updateInfo();
+  });
+  W.addEventListener("input", fitH);
+  H.addEventListener("input", fitW);
+  $("#nd-swap").addEventListener("click", () => { const t = W.value; W.value = H.value; H.value = t; updateInfo(); });
+  $("#nd-preset").addEventListener("change", e => {
+    const [w, h] = e.target.value.split("x").map(Number);
+    W.value = w; H.value = h;
+    updateInfo();
+  });
+  mark();
+  updateInfo();
 }
 function newDocument(w, h, bg, keepHint) {
   App.docW = w; App.docH = h;
@@ -1689,6 +1753,105 @@ function downloadCanvas(c, name, mime) {
 function savePNG() { downloadCanvas(compositeToCanvas(false), "pslite-editan.png", "image/png"); }
 function saveJPEG() { downloadCanvas(compositeToCanvas(true), "pslite-editan.jpg", "image/jpeg"); }
 
+/* ================= EKSPOR LENGKAP ================= */
+function stampName() {
+  const d = new Date(), p = n => String(n).padStart(2, "0");
+  return `${d.getFullYear()}${p(d.getMonth() + 1)}${p(d.getDate())}-${p(d.getHours())}${p(d.getMinutes())}${p(d.getSeconds())}`;
+}
+function downloadBlob(blob, name) {
+  const a = document.createElement("a");
+  a.download = name;
+  a.href = URL.createObjectURL(blob);
+  a.click();
+  setTimeout(() => URL.revokeObjectURL(a.href), 5000);
+}
+function canvasToBlob(c, mime, q) {
+  return new Promise(res => { try { c.toBlob(b => res(b), mime, q); } catch (e) { res(null); } });
+}
+function compositeWithBg(bg) {
+  if (bg === "transparent") return compositeToCanvas(false);
+  const src = compositeToCanvas(false);
+  const t = document.createElement("canvas");
+  t.width = App.docW; t.height = App.docH;
+  const x = t.getContext("2d");
+  x.fillStyle = bg === "black" ? "#000000" : "#ffffff";
+  x.fillRect(0, 0, t.width, t.height);
+  x.drawImage(src, 0, 0);
+  return t;
+}
+async function runExport(cfg) {
+  const name = "pslite-" + stampName();
+  if (cfg.fmt === "psd8" || cfg.fmt === "psd16") {
+    exportPSD(cfg.fmt === "psd16" ? 16 : 8, cfg.scale);
+    return;
+  }
+  const bg = cfg.fmt === "jpeg" ? "white" : cfg.bg;
+  let c = compositeWithBg(bg);
+  const w = Math.max(1, Math.round(App.docW * cfg.scale));
+  const h = Math.max(1, Math.round(App.docH * cfg.scale));
+  if (w !== App.docW || h !== App.docH) {
+    const t = document.createElement("canvas");
+    t.width = w; t.height = h;
+    const x = t.getContext("2d");
+    x.imageSmoothingEnabled = true;
+    x.imageSmoothingQuality = "high";
+    x.drawImage(c, 0, 0, w, h);
+    c = t;
+  }
+  const mime = cfg.fmt === "jpeg" ? "image/jpeg" : cfg.fmt === "webp" ? "image/webp" : "image/png";
+  const ext = cfg.fmt === "jpeg" ? "jpg" : cfg.fmt;
+  const blob = await canvasToBlob(c, mime, cfg.q / 100);
+  if (!blob) return toast("Ekspor gagal — format tidak didukung browser", true);
+  downloadBlob(blob, name + "." + ext);
+  toast("Diekspor: " + name + "." + ext + " — " + w + "×" + h + " px (" + (blob.size / 1024).toFixed(0) + " KB)");
+}
+function dialogExport() {
+  const cfg = { fmt: "png", scale: 1, q: 92, bg: "transparent" };
+  const scaleOpts = [[1, "100% (asli)"], [0.75, "75%"], [0.5, "50%"], [0.25, "25%"], [2, "200% (perbesar)"], [3, "300%"]];
+  showModal("Ekspor Gambar (lengkap)", `
+    <div class="field"><label>Format</label>
+      <select id="ex-fmt">
+        <option value="png">PNG — lossless, transparan</option>
+        <option value="jpeg">JPEG — kualitas diatur, latar putih</option>
+        <option value="webp">WebP — kecil, kualitas diatur</option>
+        <option value="psd8">PSD 8-bit — semua lapisan + folder</option>
+        <option value="psd16">PSD 16-bit — semua lapisan + folder</option>
+      </select>
+    </div>
+    <div class="field-row">
+      <div class="field"><label>Skala</label>
+        <select id="ex-scale">${scaleOpts.map(([v, n]) => `<option value="${v}">${n}</option>`).join("")}</select>
+      </div>
+      <div class="field"><label>Latar (PNG/WebP)</label>
+        <select id="ex-bg"><option value="transparent">Transparan</option><option value="white">Putih</option><option value="black">Hitam</option></select>
+      </div>
+    </div>
+    <div class="field"><label>Kualitas <span id="ex-qval">92</span>% (JPEG/WebP)</label>
+      <input type="range" id="ex-q" min="10" max="100" value="92">
+    </div>
+    <p id="ex-info" style="color:var(--text2);margin-top:8px"></p>`, [
+    { label: "Batal", onClick: () => {} },
+    { label: "Ekspor", primary: true, onClick: () => runExport(cfg) },
+  ]);
+  const fmt = $("#ex-fmt"), sc = $("#ex-scale"), q = $("#ex-q"), bg = $("#ex-bg"), info = $("#ex-info");
+  const sync = () => {
+    cfg.fmt = fmt.value; cfg.scale = +sc.value; cfg.q = +q.value; cfg.bg = bg.value;
+    const isPsd = cfg.fmt.startsWith("psd");
+    q.disabled = cfg.fmt === "png" || isPsd;
+    bg.disabled = isPsd || cfg.fmt === "jpeg";
+    $("#ex-qval").textContent = cfg.q;
+    const w = Math.max(1, Math.round(App.docW * cfg.scale));
+    const h = Math.max(1, Math.round(App.docH * cfg.scale));
+    info.textContent = `Hasil: ${w} × ${h} px` + (isPsd
+      ? " — PSD " + (cfg.fmt === "psd16" ? "16" : "8") + "-bit dengan seluruh lapisan, folder, opasitas, blend mode"
+      : cfg.fmt === "jpeg" ? " — latar putih otomatis"
+      : cfg.fmt === "png" ? " — lossless + transparansi"
+      : " — WebP kualitas " + cfg.q + "%");
+  };
+  [fmt, sc, q, bg].forEach(el => el.addEventListener("input", sync));
+  sync();
+}
+
 /* ================= MODAL ================= */
 function showModal(title, bodyHTML, buttons) {
   const root = $("#modal-root");
@@ -1705,7 +1868,11 @@ function showModal(title, bodyHTML, buttons) {
     const btn = document.createElement("button");
     btn.textContent = b.label;
     if (b.primary) btn.className = "primary";
-    btn.addEventListener("click", () => { close(); if (b.onClick) b.onClick(close); });
+    btn.addEventListener("click", () => {
+      const before = root.innerHTML;
+      if (b.onClick) b.onClick(close);
+      if (root.innerHTML === before) close();
+    });
     btnBox.appendChild(btn);
   });
   root.querySelector(".modal-backdrop").addEventListener("click", close);
@@ -1719,8 +1886,9 @@ const MENUS = {
     { sep: 1 },
     { label: "Simpan sebagai PNG", sc: "Ctrl+S", fn: savePNG },
     { label: "Simpan sebagai JPEG", fn: saveJPEG },
-    { label: "Ekspor sebagai PSD 8-bit (lapisan + folder)…", fn: () => exportPSD(8) },
-    { label: "Ekspor sebagai PSD 16-bit (lapisan + folder)…", fn: () => exportPSD(16) },
+    { label: "Ekspor Lengkap… (PNG / JPEG / WebP / PSD, skala)", sc: "Ctrl+Shift+S", fn: dialogExport },
+    { label: "Ekspor cepat PSD 8-bit (lapisan + folder)…", fn: () => exportPSD(8) },
+    { label: "Ekspor cepat PSD 16-bit (lapisan + folder)…", fn: () => exportPSD(16) },
     { sep: 1 },
     { label: "Simpan Proyek (dengan lapisan)…", fn: saveProject },
     { label: "Buka Proyek…", fn: () => $("#proj-input").click() },
@@ -1822,14 +1990,19 @@ function toggleTabMode() {
   toast(document.body.classList.contains("tab-mode") ? "Mode fokus (tekan Tab lagi untuk kembali)" : "Panel ditampilkan");
 }
 function dialogResize() {
+  const baseRatio = App.docW / App.docH;
   showModal("Ukuran Gambar", `
     <div class="field-row">
       <div class="field"><label>Lebar (px)</label><input type="number" id="rs-w" value="${App.docW}" min="1" max="8000"></div>
       <div class="field"><label>Tinggi (px)</label><input type="number" id="rs-h" value="${App.docH}" min="1" max="8000"></div>
-    </div>`, [
+    </div>
+    <div class="field"><label class="chk"><input type="checkbox" id="rs-lock" checked> Jaga rasio (${(baseRatio).toFixed(3)} : 1)</label></div>`, [
     { label: "Batal", onClick: () => {} },
     { label: "Terapkan", primary: true, onClick: () => resizeImage(+$("#rs-w").value, +$("#rs-h").value) },
   ]);
+  const W = $("#rs-w"), H = $("#rs-h"), lock = $("#rs-lock");
+  W.addEventListener("input", () => { if (lock.checked) H.value = clamp(Math.round((+W.value || 1) / baseRatio), 1, 8000); });
+  H.addEventListener("input", () => { if (lock.checked) W.value = clamp(Math.round((+H.value || 1) * baseRatio), 1, 8000); });
 }
 function shortcutsDialog() {
   const rows = [
@@ -1843,6 +2016,7 @@ function shortcutsDialog() {
     ["Zoom 100%", "Ctrl+1"], ["Batal (crop/teks)", "Esc"],
     ["Mode fokus (sembunyikan panel)", "Tab"], ["Snap tepi/tengah (on/off)", "Tampilan → Snap"],
     ["Grup / Ungroup lapisan", "⊞ / ⊟"], ["Tambah font", "＋ Font… (options bar Teks)"],
+    ["Ekspor lengkap (semua format)", "Ctrl+Shift+S"], ["Rasio pangkas", "options bar Pangkas"],
   ];
   showModal("Pintasan Keyboard", `
     <table class="shortcut-table">
@@ -1915,6 +2089,8 @@ function helpGuideDialog() {
     <p style="margin-top:8px"><b>Mode Fokus (Tab)</b> — tekan <b>Tab</b> untuk menyembunyikan menu, tool bar, options bar, dan semua panel agar kanvas penuh; tekan Tab lagi untuk kembali.</p>
     <p style="margin-top:8px"><b>Ungroup per item</b> — di panel Lapisan pilih lapisan anggota folder lalu tekan tombol <b>⊟ (Ungroup)</b>; hanya lapisan itu yang keluar dari folder. Setiap teks kini dibuat sebagai <b>lapisan sendiri</b> ("Teks: …") sehingga bisa dipindah/ungroup satu per satu. <b>⊞</b> menggabungkan lapisan terpilih jadi folder baru, <b>▤</b> membuat folder kosong.</p>
     <p style="margin-top:8px"><b>Tata letak panel</b> — seret garis pembatas kiri panel untuk mengatur lebarnya, dan seret <b>garis pembatas horizontal di antara panel</b> untuk mengatur tinggi tiap panel (atas–bawah). Semua ukuran tersimpan otomatis; klik dua kali sebuah pembatas untuk reset pembatas itu. Klik judul panel untuk melipat/membuka, dan <b>klik dua kali judul</b> untuk <b>mode solo</b>: panel itu mendominasi layar dan panel lain dilipat. Menu <b>Tampilan → Panel</b> punya reset lebar, reset tinggi semua, &amp; buka semua.</p>
+    <p style="margin-top:8px"><b>Rasio dokumen</b> — di <b>Berkas → Baru</b> ada preset ukuran (HD, Full HD, feed 1:1, story 9:16, webtoon 800×1280 / 1600×2560, A4 300dpi) dan chip rasio (1:1, 4:3, 3:2, 16:9, 9:16, 3:4, 2:3, A4, Webtoon); lebar/tinggi otomatis mengikuti rasio, tombol ⇄ menukar orientasi. Tool <b>Pangkas (C)</b> juga punya pilihan rasio. <b>Ukuran Gambar</b> punya kunci rasio.</p>
+    <p style="margin-top:8px"><b>Ekspor lengkap (Ctrl+Shift+S)</b> — pilih format <b>PNG / JPEG / WebP / PSD 8-bit / PSD 16-bit</b>, <b>skala</b> 25–300%, <b>kualitas</b> JPEG/WebP, dan <b>latar</b> transparan/putih/hitam (PNG/WebP; JPEG otomatis putih). PSD selalu membawa seluruh lapisan + folder + blend mode. Nama file memakai tanggal-jam agar tidak tertimpa.</p>
     <p style="margin-top:8px"><b>PSD 16-bit</b> — <b>Berkas → Ekspor sebagai PSD 16-bit</b> menulis 16 bit per kanal (nilai 8-bit diperhalus ke rentang 0–65535), cocok untuk cetak &amp; grading lanjutan; semua lapisan, folder, opasitas, mode campuran, dan visibilitas tetap ikut. Ukuran file ±2× PSD 8-bit.</p>
     <p style="margin-top:8px"><b>Font</b> — lihat menu <b>Font → Panduan Font</b> untuk cara menambah font di dalam aplikasi maupun permanen melalui folder <code>fonts/</code>.</p>`);
 }
@@ -2006,6 +2182,10 @@ function updateOptionsBar() {
       <button data-v="both" class="${App.shapeMode === "both" ? "on" : ""}">Keduanya</button>
     </div>`;
   } else if (t === "crop") {
+    html += `<label>Rasio
+      <select id="ob-cropratio">
+        ${DOC_RATIOS.map(x => `<option value="${x.r}" ${x.r === App.cropRatio ? "selected" : ""}>${x.name}</option>`).join("")}
+      </select></label>`;
     if (App.cropRect) {
       html += `<button class="opt-btn primary" id="ob-crop-apply">✓ Terapkan Pangkasan</button>
                <button class="opt-btn" id="ob-crop-cancel">✕ Batalkan</button>
@@ -2042,6 +2222,7 @@ function updateOptionsBar() {
   const ps = $("#ob-preset");
   if (ps) ps.addEventListener("change", () => selectBrushPreset(ps.value));
   const f = $("#ob-font"); if (f) f.addEventListener("change", () => App.fontFamily = f.value);
+  const cr = $("#ob-cropratio"); if (cr) cr.addEventListener("change", () => { App.cropRatio = +cr.value; });
   const af = $("#ob-addfont"); if (af) af.addEventListener("click", () => $("#font-input").click());
   const gm = $("#ob-gradmode"); if (gm) gm.addEventListener("change", () => App.gradMode = gm.value);
   const fs = $("#ob-fsize"); if (fs) fs.addEventListener("change", () => App.fontSize = clamp(+fs.value, 6, 400));
@@ -2481,7 +2662,7 @@ document.addEventListener("keydown", e => {
     const k = e.key.toLowerCase();
     if (k === "z") { e.preventDefault(); e.shiftKey ? redo() : undo(); return; }
     if (k === "y") { e.preventDefault(); redo(); return; }
-    if (k === "s") { e.preventDefault(); savePNG(); return; }
+    if (k === "s") { e.preventDefault(); e.shiftKey ? dialogExport() : savePNG(); return; }
     if (k === "o") { e.preventDefault(); $("#file-input").click(); return; }
     if (k === "n") { e.preventDefault(); newDocDialog(); return; }
     if (k === "a") { e.preventDefault(); selectAll(); return; }

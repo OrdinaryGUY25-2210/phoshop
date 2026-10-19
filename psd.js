@@ -162,28 +162,41 @@ function psdPlanesFromCanvas(c) {
   for (let i = 0; i < n; i++) { r[i] = d[i * 4]; g[i] = d[i * 4 + 1]; b[i] = d[i * 4 + 2]; a[i] = d[i * 4 + 3]; }
   return { r, g, b, a };
 }
-function exportPSD(depth) {
+function psdScaleCanvas(c, w, h) {
+  const t = document.createElement("canvas");
+  t.width = w; t.height = h;
+  const x = t.getContext("2d", { willReadFrequently: true });
+  x.imageSmoothingEnabled = true;
+  x.imageSmoothingQuality = "high";
+  x.drawImage(c, 0, 0, w, h);
+  return t;
+}
+function exportPSD(depth, scale) {
   depth = depth === 16 ? 16 : 8;
-  const w = App.docW, h = App.docH;
+  scale = scale || 1;
+  const w = Math.max(1, Math.round(App.docW * scale));
+  const h = Math.max(1, Math.round(App.docH * scale));
+  const planes = c => (c.width === w && c.height === h) ? psdPlanesFromCanvas(c) : psdPlanesFromCanvas(psdScaleCanvas(c, w, h));
   const groupIds = new Set(App.layers.filter(l => l.isGroup).map(l => l.id));
   const records = [];
   for (const l of App.layers) {
     if (l.group && groupIds.has(l.group)) continue;
     if (l.isGroup) {
       records.push({ name: l.name, opacity: 255, visible: l.visible, groupStart: l.expanded === false ? 2 : 1 });
-      for (const m of App.layers) if (m.group === l.id) records.push({ name: m.name, opacity: Math.round(m.opacity * 2.55), visible: m.visible, blend: m.blendMode, ...psdPlanesFromCanvas(m.canvas) });
+      for (const m of App.layers) if (m.group === l.id) records.push({ name: m.name, opacity: Math.round(m.opacity * 2.55), visible: m.visible, blend: m.blendMode, ...planes(m.canvas) });
       records.push({ name: "</Layer group>", opacity: 255, visible: false, divider: 3 });
     } else {
-      records.push({ name: l.name, opacity: Math.round(l.opacity * 2.55), visible: l.visible, blend: l.blendMode, ...psdPlanesFromCanvas(l.canvas) });
+      records.push({ name: l.name, opacity: Math.round(l.opacity * 2.55), visible: l.visible, blend: l.blendMode, ...planes(l.canvas) });
     }
   }
-  const comp = psdPlanesFromCanvas(compositeToCanvas(false));
+  const comp = planes(compositeToCanvas(false));
   const bytes = buildPSD({ w, h, records, comp, depth });
   const blob = new Blob([bytes], { type: "image/vnd.adobe.photoshop" });
   const a = document.createElement("a");
-  a.download = depth === 16 ? "editan-pslite-16bit.psd" : "editan-pslite.psd";
+  const tag = (depth === 16 ? "16bit" : "8bit") + (scale !== 1 ? "-" + Math.round(scale * 100) : "");
+  a.download = "pslite-" + tag + "-" + stampName() + ".psd";
   a.href = URL.createObjectURL(blob);
   a.click();
   setTimeout(() => URL.revokeObjectURL(a.href), 5000);
-  toast("PSD " + depth + "-bit diekspor (" + Math.round(bytes.length / 1048576) + " MB) — bisa dibuka di Photoshop / Photopea / CSP");
+  toast("PSD " + depth + "-bit " + w + "×" + h + " diekspor (" + (bytes.length / 1048576).toFixed(2) + " MB) — lapisan + folder ikut");
 }

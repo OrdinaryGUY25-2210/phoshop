@@ -17,7 +17,9 @@ Aplikasi editor foto **satu codebase untuk 3 platform**:
 - **Penyesuaian (preview langsung):** Kecerahan/Kontras, Rona/Saturasi/Cahaya, **Levels**
 - **Filter:** Blur, Blur Cepat, Perjelas, Invert, Grayscale, Sepia, Noise, **Mosaic, Emboss, Find Edges**
 - **Transformasi:** **Free Transform (Ctrl+T)** — skala/putar/pindah; **Putar 90°/cermin kanvas**
-- **Ekspor:** PNG, JPEG, **PSD 8-bit & 16-bit (lapisan + folder, RLE)** — bisa dibuka di Photoshop/Photopea/CSP; simpan/buka **proyek JSON** (semua lapisan utuh)
+- **Dokumen & rasio:** dialog Baru punya **preset ukuran** (HD, Full HD, feed 1:1, story 9:16, webtoon 800×1280 / 1600×2560, A4 300dpi) dan **chip rasio** (1:1, 4:3, 3:2, 16:9, 9:16, 3:4, 2:3, A4, A4-L, Webtoon) dengan kunci otomatis + tukar orientasi; **Pangkas (C)** punya pilihan rasio; **Ukuran Gambar** punya kunci rasio.
+- **Ekspor lengkap (Ctrl+Shift+S):** **PNG / JPEG / WebP / PSD 8-bit / PSD 16-bit**, skala 25–300%, kualitas JPEG/WebP, latar transparan/putih/hitam (JPEG otomatis putih), nama file ber-timestamp. PSD selalu menyertakan seluruh lapisan + folder + blend mode + opasitas + visibilitas.
+- **Ekspor cepat:** PNG, JPEG, PSD 8/16-bit via menu Berkas; simpan/buka **proyek JSON** (semua lapisan utuh)
 - **Snap (menempel):** saat menggeser lapisan/seleksi & menggambar bentuk, tepi/titik tengah menempel ke tepi kanvas, titik tengah, dan garis grid (Tampilan → Snap, toleransi 6 px layar)
 - **Mode fokus (Tab):** sembunyikan menu, toolbar, options bar, dan panel agar kanvas penuh
 - **Font kustom:** tombol **＋ Font…** di options bar Teks / menu **Font** — muat `.ttf/.otf/.woff` dari file; panduan permanen di `fonts/README.md` dan menu **Font → Panduan Font**
@@ -65,7 +67,7 @@ Install APK ke HP (`adb install …`) atau langsung Run dari Android Studio.
 |---|---|
 | V M C B E G I T U Z H | pilih tool |
 | Ctrl+Z / Ctrl+Y | Urungkan / Ulangi |
-| Ctrl+S | Simpan PNG |
+| Ctrl+S / Ctrl+Shift+S | Simpan PNG / Ekspor lengkap |
 | Ctrl+N / Ctrl+O | Baru / Buka |
 | Ctrl+A / Ctrl+D | Pilih semua / batalkan |
 | Del / Alt+Del / Ctrl+Del | Hapus isi / isi warna depan / belakang |
