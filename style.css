@@ -326,6 +326,27 @@ html, body {
 }
 #split-right:hover::after { background: var(--accent); width: 2px; left: 2px; }
 body.col-resize, body.col-resize * { cursor: col-resize !important; user-select: none !important; }
+body.row-resize, body.row-resize * { cursor: row-resize !important; user-select: none !important; }
+
+/* Pembatas tinggi antar panel (atas–bawah) */
+.panel-split {
+  height: 7px;
+  margin: 0;
+  cursor: row-resize;
+  position: relative;
+  flex-shrink: 0;
+}
+.panel-split::after {
+  content: "";
+  position: absolute;
+  left: 0; right: 0; top: 3px;
+  height: 1px;
+  background: var(--border);
+  transition: background .15s;
+}
+.panel-split:hover::after { background: var(--accent); height: 2px; top: 2px; }
+.panel.collapsed + .panel-split { display: none; }
+.panel.sized .panel-body { overflow-y: auto; }
 
 #panels {
   width: var(--panels-w, 288px);
@@ -721,6 +742,7 @@ body.col-resize, body.col-resize * { cursor: col-resize !important; user-select:
     display: block;
   }
   #split-right { display: none; }
+  .panel-split { display: none; }
   .panel.solo .panel-body { max-height: none; }
   #panels.open { transform: translateY(0); }
 

@@ -20,6 +20,7 @@ const App = {
   brushQuery: "",
   panelLayout: null,
   resizing: null,
+  vresize: null,
   bucketTolerance: 32,
   shapeType: "rect", shapeMode: "fill",
   gradMode: "fgt",
@@ -1771,6 +1772,7 @@ const MENUS = {
     { label: () => (document.body.classList.contains("tab-mode") ? "✓ " : "   ") + "Mode Fokus (Tab)", sc: "Tab", fn: toggleTabMode },
     { sep: 1 },
     { label: "Panel: Reset Lebar", fn: () => { setPanelsWidth(288); savePanelLayout(); toast("Lebar panel direset (288 px)"); } },
+    { label: "Panel: Reset Tinggi Semua", fn: () => { App.panelLayout.heights = {}; applyPanelLayout(); savePanelLayout(); toast("Tinggi semua panel direset"); } },
     { label: "Panel: Buka Semua", fn: () => { App.panelLayout.collapsed = []; App.panelLayout.solo = null; applyPanelLayout(); savePanelLayout(); toast("Semua panel dibuka"); } },
   ],
   Font: [
@@ -1912,7 +1914,7 @@ function helpGuideDialog() {
     <p><b>Snap (menempel)</b> — aktif secara baku, bisa dimatikan di <b>Tampilan → Snap</b>. Saat menggeser lapisan/seleksi dan menggambar bentuk, tepi &amp; titik tengah objek menempel ke <b>tepi kanvas</b>, <b>titik tengah</b>, dan garis grid (bila Grid aktif). Toleransi 6 px di layar.</p>
     <p style="margin-top:8px"><b>Mode Fokus (Tab)</b> — tekan <b>Tab</b> untuk menyembunyikan menu, tool bar, options bar, dan semua panel agar kanvas penuh; tekan Tab lagi untuk kembali.</p>
     <p style="margin-top:8px"><b>Ungroup per item</b> — di panel Lapisan pilih lapisan anggota folder lalu tekan tombol <b>⊟ (Ungroup)</b>; hanya lapisan itu yang keluar dari folder. Setiap teks kini dibuat sebagai <b>lapisan sendiri</b> ("Teks: …") sehingga bisa dipindah/ungroup satu per satu. <b>⊞</b> menggabungkan lapisan terpilih jadi folder baru, <b>▤</b> membuat folder kosong.</p>
-    <p style="margin-top:8px"><b>Tata letak panel</b> — seret garis pembatas di kiri panel untuk mengatur lebarnya (tersimpan otomatis; klik dua kali pembatas untuk reset). Klik judul panel untuk melipat/membuka, dan <b>klik dua kali judul</b> untuk <b>mode solo</b>: panel itu mendominasi layar dan panel lain dilipat. Menu <b>Tampilan → Panel</b> punya reset lebar &amp; buka semua.</p>
+    <p style="margin-top:8px"><b>Tata letak panel</b> — seret garis pembatas kiri panel untuk mengatur lebarnya, dan seret <b>garis pembatas horizontal di antara panel</b> untuk mengatur tinggi tiap panel (atas–bawah). Semua ukuran tersimpan otomatis; klik dua kali sebuah pembatas untuk reset pembatas itu. Klik judul panel untuk melipat/membuka, dan <b>klik dua kali judul</b> untuk <b>mode solo</b>: panel itu mendominasi layar dan panel lain dilipat. Menu <b>Tampilan → Panel</b> punya reset lebar, reset tinggi semua, &amp; buka semua.</p>
     <p style="margin-top:8px"><b>PSD 16-bit</b> — <b>Berkas → Ekspor sebagai PSD 16-bit</b> menulis 16 bit per kanal (nilai 8-bit diperhalus ke rentang 0–65535), cocok untuk cetak &amp; grading lanjutan; semua lapisan, folder, opasitas, mode campuran, dan visibilitas tetap ikut. Ukuran file ±2× PSD 8-bit.</p>
     <p style="margin-top:8px"><b>Font</b> — lihat menu <b>Font → Panduan Font</b> untuk cara menambah font di dalam aplikasi maupun permanen melalui folder <code>fonts/</code>.</p>`);
 }
@@ -2225,6 +2227,18 @@ function applyPanelLayout() {
     const collapsed = L.solo ? L.solo !== key : (L.collapsed || []).includes(key);
     p.classList.toggle("collapsed", collapsed);
     p.classList.toggle("solo", L.solo === key);
+    const body = p.querySelector(".panel-body");
+    if (!body) return;
+    const h = (L.heights || {})[key];
+    if (h && L.solo !== key && !collapsed) {
+      body.style.height = h + "px";
+      body.style.overflowY = "auto";
+      p.classList.add("sized");
+    } else {
+      body.style.height = "";
+      body.style.overflowY = "";
+      p.classList.remove("sized");
+    }
   });
 }
 function togglePanelSolo(key) {
@@ -2236,7 +2250,7 @@ function togglePanelSolo(key) {
 function initPanelLayout() {
   App.panelLayout = loadPanelLayout();
   applyPanelLayout();
-  $$("#panels .panel").forEach(p => {
+  $$("#panels .panel").forEach((p, idx, arr) => {
     const key = p.dataset.panel;
     const h = p.querySelector("h3");
     h.title = "Klik: buka/tutup — klik dua kali: solo panel ini";
@@ -2249,6 +2263,51 @@ function initPanelLayout() {
       applyPanelLayout(); savePanelLayout();
     });
     h.addEventListener("dblclick", e => { e.preventDefault(); togglePanelSolo(key); });
+    if (idx === arr.length - 1) return;
+    const sp = document.createElement("div");
+    sp.className = "panel-split";
+    sp.title = "Geser: atur tinggi panel di atasnya — klik dua kali: reset";
+    p.insertAdjacentElement("afterend", sp);
+    sp.addEventListener("pointerdown", e => {
+      if (p.classList.contains("collapsed") || p.classList.contains("solo")) return;
+      e.preventDefault();
+      try { sp.setPointerCapture(e.pointerId); } catch (err) {}
+      const body = p.querySelector(".panel-body");
+      App.vresize = { key, y: e.clientY, h: body.getBoundingClientRect().height, body, panel: p, moved: false };
+      document.body.classList.add("row-resize");
+    });
+    sp.addEventListener("pointermove", e => {
+      const v = App.vresize;
+      if (!v || v.key !== key) return;
+      const hgt = clamp(Math.round(v.h + (e.clientY - v.y)), 36, Math.round(window.innerHeight * 0.75));
+      v.body.style.height = hgt + "px";
+      v.body.style.overflowY = "auto";
+      v.panel.classList.add("sized");
+      v.h2 = hgt;
+      v.moved = true;
+    });
+    const endHeight = () => {
+      const v = App.vresize;
+      if (!v || v.key !== key) return;
+      if (v.moved) {
+        App.panelLayout.heights = App.panelLayout.heights || {};
+        App.panelLayout.heights[key] = v.h2;
+        savePanelLayout();
+      }
+      App.vresize = null;
+      document.body.classList.remove("row-resize");
+    };
+    sp.addEventListener("pointerup", endHeight);
+    sp.addEventListener("pointercancel", endHeight);
+    sp.addEventListener("dblclick", () => {
+      if (App.panelLayout.heights) delete App.panelLayout.heights[key];
+      const body = p.querySelector(".panel-body");
+      body.style.height = "";
+      body.style.overflowY = "";
+      p.classList.remove("sized");
+      savePanelLayout();
+      toast("Tinggi panel direset");
+    });
   });
   const sp = $("#split-right"), box = $("#panels");
   if (!sp || !box) return;
