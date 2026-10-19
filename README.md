@@ -10,12 +10,17 @@ Aplikasi editor foto **satu codebase untuk 3 platform**:
 
 ## Fitur lengkap
 
-- **Tools (kiri):** Pindah, Kotak Pilih (seleksi), **Lasso**, Pangkas, Kuas, Penghapus, Ember Cat (toleransi), **Gradasi**, Penetes Warna, Teks (font/tebal/miring), Bentuk (persegi/lingkaran/garis — isi/tepi), Zoom, Tangan
+- **Tools (kiri):** Pindah, Kotak Pilih (seleksi), **Lasso**, **Tongkat Sihir (W)** — toleransi, berdekatan/global, sampel semua lapisan, Pangkas, Kuas, Penghapus, Ember Cat (toleransi), **Gradasi**, Penetes Warna, Teks (font/tebal/miring), Bentuk (persegi/lingkaran/garis — isi/tepi), Zoom, Tangan
+- **Seleksi lanjutan:** Balikkan Seleksi (Ctrl+Shift+I), **Feather/haluskan tepi**, **Perluas/Kontraksi** seleksi; seleksi berbasis mask (hasil tongkat sihir) dipakai untuk isi/hapus/pindah
+- **Clipboard:** **Potong / Salin / Tempel** (Ctrl+X / Ctrl+C / Ctrl+V) — tempel jadi objek mengambang yang bisa digeser lalu Enter untuk menetapkan
+- **Gaya Lapisan (Fx):** **tepi/outline**, **bayangan jatuh (drop shadow)**, **cahaya luar (glow)** — non-destruktif, ikut ekspor PNG/JPEG/WebP
+- **Mask lapisan:** "Mask dari Seleksi" (non-destruktif), aktif/nonaktif, hapus — tombol **M** di panel Lapisan (klik kanan tombol M = hapus mask)
+- **Buka PSD (Ctrl+Alt+O / menu Berkas):** impor `.psd` 8 & 16-bit (RGB/Grayscale) — lapisan, nama, opasitas, blend mode, visibilitas, dan **folder** ikut terbaca (RLE/non-kompres)
 - **Kuas Komik / Webtoon (panel Kanan):** **44 preset** — Pena Komik (G-Pen, Mapping, R-Pen Maru, Brush Pen, Tinta Air, Pena Bulu, Pena Kering, Tinta Cepat, Tinta Tebal, Fineliner), Tekstur (Pensil, Cat Air, Airbrush, Arang, Pastel, Krayon, Spons, Kuas Kering, Kapur), **Screentone** (titik besar/sedang/halus/45°/rapat/jumbo, garis, garis tegak, silang, kisi, bintik — pola sejajar dokumen), **Efek Webtoon** (Speed Lines, Garis Vertikal, Kilau/Star, Kilau Bintang, Cipratan, Cipratan Besar, Ledakan, Kilat, Bintik Cahaya, Asap/Kabut, Asap Tebal, Gores Abstrak, Goresan Emosi, Cahaya Lembut) + **pencarian & filter kategori**. Tekanan stylus (Pointer Events) didukung untuk pena ± tipis.
 - **Panel fleksibel:** seret pembatas antara kanvas & panel untuk mengubah **lebar**, dan seret pembatas **horizontal antar panel** untuk mengubah **tinggi** tiap panel (atas–bawah) — semuanya tersimpan otomatis. Klik judul panel untuk buka/tutup; **klik dua kali judul = mode solo** (panel itu mendominasi, panel lain dilipat); reset lebar/tinggi via klik dua kali pembatas atau **Tampilan → Panel**.
 - **Lapisan:** tambah, duplikat, hapus, naik/turun, gabung ke bawah, ratakan, visibilitas, kunci, opasitas, 16 mode blend, rename, **folder (grup/ungroup)**: buat folder, masukkan lapisan, **lepas satu per satu (⊟)**, buka/tutup, sembunyikan seluruh folder (ikut ekspor PSD). **Setiap teks otomatis jadi lapisan sendiri** ("Teks: …") sehingga bisa dipindah/di-ungroup per item.
-- **Penyesuaian (preview langsung):** Kecerahan/Kontras, Rona/Saturasi/Cahaya, **Levels**
-- **Filter:** Blur, Blur Cepat, Perjelas, Invert, Grayscale, Sepia, Noise, **Mosaic, Emboss, Find Edges**
+- **Penyesuaian (preview langsung):** Kecerahan/Kontras, Rona/Saturasi/Cahaya, **Levels**, **Exposure, Vibrance/Saturasi, Color Balance, Threshold, Posterize**, plus sekali-klik **Auto Tone** & **Auto Kontras**
+- **Filter:** Blur, Blur Cepat, Perjelas, Invert, Grayscale, Sepia, Noise, **Mosaic, Emboss, Find Edges, Motion Blur, Reduce Noise, Clouds (awan)**
 - **Transformasi:** **Free Transform (Ctrl+T)** — skala/putar/pindah; **Putar 90°/cermin kanvas**
 - **Dokumen & rasio:** dialog Baru punya **preset ukuran** (HD, Full HD, feed 1:1, story 9:16, webtoon 800×1280 / 1600×2560, A4 300dpi) dan **chip rasio** (1:1, 4:3, 3:2, 16:9, 9:16, 3:4, 2:3, A4, A4-L, Webtoon) dengan kunci otomatis + tukar orientasi; **Pangkas (C)** punya pilihan rasio; **Ukuran Gambar** punya kunci rasio.
 - **Ekspor lengkap (Ctrl+Shift+S):** **PNG / JPEG / WebP / PSD 8-bit / PSD 16-bit**, skala 25–300%, kualitas JPEG/WebP, latar transparan/putih/hitam (JPEG otomatis putih), nama file ber-timestamp. PSD selalu menyertakan seluruh lapisan + folder + blend mode + opasitas + visibilitas.
@@ -23,7 +28,12 @@ Aplikasi editor foto **satu codebase untuk 3 platform**:
 - **Snap (menempel):** saat menggeser lapisan/seleksi & menggambar bentuk, tepi/titik tengah menempel ke tepi kanvas, titik tengah, dan garis grid (Tampilan → Snap, toleransi 6 px layar)
 - **Mode fokus (Tab):** sembunyikan menu, toolbar, options bar, dan panel agar kanvas penuh
 - **Font kustom:** tombol **＋ Font…** di options bar Teks / menu **Font** — muat `.ttf/.otf/.woff` dari file; panduan permanen di `fonts/README.md` dan menu **Font → Panduan Font**
-- **Lainnya:** Riwayat (undo/redo, klik langkah), grid, buka seret-dan-lepas, zoom roda mouse + **pinch zoom di HP**
+- **Menu klik kanan:** klik kanan di kanvas (potong/salin/tempel, seleksi, transformasi, Fx, mask, ukuran kanvas, snap/grid, ekspor, autosave) dan klik kanan di baris lapisan (ganti nama, duplikat, hapus, gabung, Fx, mask, **edit teks**, visibilitas, kunci, folder)
+- **Teks bisa diedit ulang:** klik kanan lapisan teks → **Edit Teks…** (isi, ukuran, warna) — badge **T** di panel lapisan
+- **Ukuran Kanvas…:** perbesar/perkecil area kanvas dengan **jangkar 9 posisi** tanpa mengubah isi
+- **Autosave & pemulihan:** cadangan otomatis tiap 60 detik (localStorage, ≤4,5 MB) + tawaran **Pulihkan** saat aplikasi dibuka; manual via menu Bantuan / klik kanan
+- **Riwayat** kini 50 langkah; **format proyek JSON v2** ikut menyimpan gaya (Fx), teks, dan mask
+- **Lainnya:** grid, buka seret-dan-lepas (gambar/PSD/proyek; tahan **Alt** untuk impor sebagai lapisan), zoom roda mouse + **pinch zoom di HP**
 - **UI responsif:** desktop = toolbar kiri + panel kanan; HP = toolbar bawah + panel laci (tombol ☰ Panel)
 
 ## Cara menjalankan
@@ -65,11 +75,13 @@ Install APK ke HP (`adb install …`) atau langsung Run dari Android Studio.
 
 | Tombol | Aksi |
 |---|---|
-| V M C B E G I T U Z H | pilih tool |
+| V M L W C B E G N I T U Z H | pilih tool |
 | Ctrl+Z / Ctrl+Y | Urungkan / Ulangi |
 | Ctrl+S / Ctrl+Shift+S | Simpan PNG / Ekspor lengkap |
-| Ctrl+N / Ctrl+O | Baru / Buka |
+| Ctrl+N / Ctrl+O / Ctrl+Alt+O | Baru / Buka / Buka PSD |
 | Ctrl+A / Ctrl+D | Pilih semua / batalkan |
+| Ctrl+X / Ctrl+C / Ctrl+V | Potong / Salin / Tempel |
+| Ctrl+Shift+I | Balikkan seleksi |
 | Del / Alt+Del / Ctrl+Del | Hapus isi / isi warna depan / belakang |
 | [ dan ] | kecilkan / besarkan kuas |
 | X / D | tukar / reset warna |

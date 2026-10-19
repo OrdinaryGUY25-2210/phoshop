@@ -22,8 +22,10 @@ const App = {
   resizing: null,
   vresize: null,
   bucketTolerance: 32,
+  wandTolerance: 32, wandContiguous: true, wandSampleAll: false,
   shapeType: "rect", shapeMode: "fill",
   gradMode: "fgt",
+  clip: null,
   transform: null,
   gradEnd: null,
   fontFamily: "Arial", fontSize: 42, fontBold: false, fontItalic: false,
@@ -49,6 +51,8 @@ const TOOLS = {
     svg: '<rect x="4" y="5" width="16" height="14" rx="1" stroke-dasharray="3 2"/>' },
   lasso:   { label: "Lasso",       key: "L", icon: "◯",
     svg: '<path d="M12 4c5 0 8 3 8 7 0 4-3 7-8 7-4 0-7-2-7-5 0-2 2-4 4-4 3 0 4 2 3 3"/><path d="M7 18l-2 3"/>' },
+  wand:    { label: "Tongkat Sihir", key: "W", icon: "✦",
+    svg: '<path d="M4 20L16 8"/><path d="M15 3l1 3 3 1-3 1-1 3-1-3-3-1 3-1z"/><path d="M20 12l.7 2 1.8.7-1.8.7L20 18l-.7-2.6-1.8-.7 1.8-.7z"/>' },
   crop:    { label: "Pangkas",     key: "C", icon: "✂",
     svg: '<path d="M7 2v15h15M2 7h15v15"/>' },
   brush:   { label: "Kuas",        key: "B", icon: "🖌",
@@ -291,7 +295,7 @@ function flattenImage() {
     if (l.isGroup || !isLayerVisible(l)) continue;
     flat.ctx.globalAlpha = l.opacity / 100;
     flat.ctx.globalCompositeOperation = l.blendMode;
-    flat.ctx.drawImage(l.canvas, 0, 0);
+    drawLayerStyled(flat.ctx, l);
   }
   flat.ctx.globalAlpha = 1; flat.ctx.globalCompositeOperation = "source-over";
   App.layers = [flat];
@@ -307,13 +311,16 @@ function snapshot() {
       id: l.id, name: l.name, visible: l.visible, opacity: l.opacity,
       locked: l.locked, blendMode: l.blendMode, canvas: cloneCanvas(l.canvas),
       isGroup: !!l.isGroup, group: l.group || null, expanded: l.expanded !== false,
+      style: l.style ? JSON.parse(JSON.stringify(l.style)) : null,
+      text: l.text ? JSON.parse(JSON.stringify(l.text)) : null,
+      mask: l.mask ? cloneCanvas(l.mask) : null,
     })),
   };
 }
 function pushHistory(label) {
   App.history = App.history.slice(0, App.historyIndex + 1);
   App.history.push({ label, state: snapshot() });
-  if (App.history.length > 30) App.history.shift();
+  if (App.history.length > 50) App.history.shift();
   App.historyIndex = App.history.length - 1;
   renderHistoryList();
 }
@@ -328,6 +335,9 @@ function jumpTo(i) {
     locked: sl.locked, blendMode: sl.blendMode,
     isGroup: !!sl.isGroup, group: sl.group || null, expanded: sl.expanded !== false,
     canvas: sl.canvas, ctx: makeCtx(sl.canvas),
+    style: sl.style ? JSON.parse(JSON.stringify(sl.style)) : null,
+    text: sl.text ? JSON.parse(JSON.stringify(sl.text)) : null,
+    mask: sl.mask ? cloneCanvas(sl.mask) : null,
   }));
   App.activeLayerId = (App.layers.some(x => x.id === s.activeLayerId) ? s.activeLayerId : (App.layers[0] && App.layers[0].id));
   App.selection = null; App.cropRect = null; App.floatSel = null;
@@ -394,7 +404,7 @@ function render() {
     if (l.isGroup || !isLayerVisible(l)) continue;
     cctx.globalAlpha = l.opacity / 100;
     cctx.globalCompositeOperation = l.blendMode;
-    cctx.drawImage(l.canvas, 0, 0);
+    drawLayerStyled(cctx, l);
   }
   cctx.globalAlpha = 1; cctx.globalCompositeOperation = "source-over";
 
@@ -465,9 +475,13 @@ function drawMarchingAnts(ctx, r) {
   const z = App.zoom;
   ctx.save();
   const path = r.type === "lasso" ? selPath2D(r) : null;
-  const strokeIt = (dash) => {
+  const strokeIt = () => {
     ctx.lineWidth = 1.2 / z;
     if (path) { ctx.stroke(path); return; }
+    if (r.type === "mask") {
+      ctx.strokeRect(r.x + .5 / z, r.y + .5 / z, Math.max(0, r.w - 1 / z), Math.max(0, r.h - 1 / z));
+      return;
+    }
     ctx.strokeRect(r.x, r.y, r.w, r.h);
   };
   ctx.setLineDash([]);
@@ -546,6 +560,266 @@ function selPath2D(sel) {
   for (let i = 1; i < sel.pts.length; i++) p.lineTo(sel.pts[i][0], sel.pts[i][1]);
   p.closePath();
   return p;
+}
+
+/* ================= SELEKSI BERBASIS MASK ================= */
+function newDocCanvas(w = App.docW, h = App.docH) {
+  const c = document.createElement("canvas");
+  c.width = Math.max(1, w); c.height = Math.max(1, h);
+  return c;
+}
+function rasterizeSelection(sel) {
+  const c = newDocCanvas();
+  const x = c.getContext("2d", { willReadFrequently: true });
+  x.fillStyle = "#fff";
+  if (!sel) { x.fillRect(0, 0, App.docW, App.docH); return c; }
+  if (sel.type === "mask") return sel.mask;
+  x.beginPath();
+  if (sel.type === "lasso" && sel.pts && sel.pts.length > 2) {
+    x.moveTo(sel.pts[0][0], sel.pts[0][1]);
+    for (let i = 1; i < sel.pts.length; i++) x.lineTo(sel.pts[i][0], sel.pts[i][1]);
+    x.closePath();
+  } else x.rect(sel.x, sel.y, sel.w, sel.h);
+  x.fill();
+  return c;
+}
+function selectionMask(sel) {
+  return sel && sel.type === "mask" ? sel.mask : rasterizeSelection(sel);
+}
+function maskBBox(mask) {
+  const d = mask.getContext("2d", { willReadFrequently: true }).getImageData(0, 0, mask.width, mask.height).data;
+  let minX = mask.width, minY = mask.height, maxX = -1, maxY = -1;
+  for (let y = 0; y < mask.height; y++) {
+    for (let x = 0; x < mask.width; x++) {
+      if (d[(y * mask.width + x) * 4 + 3] > 8) {
+        if (x < minX) minX = x; if (x > maxX) maxX = x;
+        if (y < minY) minY = y; if (y > maxY) maxY = y;
+      }
+    }
+  }
+  return maxX < 0 ? null : { x: minX, y: minY, w: maxX - minX + 1, h: maxY - minY + 1 };
+}
+function setSelectionMask(mask) {
+  const b = maskBBox(mask);
+  App.selection = b ? { type: "mask", mask, x: b.x, y: b.y, w: b.w, h: b.h } : null;
+  App.floatSel = null;
+  App.dirty = true;
+  updateOptionsBar();
+}
+function invertSelection() {
+  if (!App.selection) {
+    App.selection = { type: "rect", x: 0, y: 0, w: App.docW, h: App.docH };
+  } else {
+    const m = selectionMask(App.selection);
+    const out = newDocCanvas();
+    const x = out.getContext("2d", { willReadFrequently: true });
+    x.fillStyle = "#fff";
+    x.fillRect(0, 0, App.docW, App.docH);
+    x.globalCompositeOperation = "destination-out";
+    x.drawImage(m, 0, 0);
+    setSelectionMask(out);
+  }
+  App.dirty = true;
+  updateOptionsBar();
+}
+function featherSelection(px) {
+  if (!App.selection) return toast("Tidak ada seleksi", true);
+  const m = selectionMask(App.selection);
+  const out = newDocCanvas();
+  const x = out.getContext("2d", { willReadFrequently: true });
+  try { x.filter = `blur(${Math.max(0.5, px)}px)`; } catch (e) {}
+  x.drawImage(m, 0, 0);
+  setSelectionMask(out);
+  toast("Seleksi dihaluskan (" + px + " px)");
+}
+function growSelection(px) {
+  if (!App.selection) return toast("Tidak ada seleksi", true);
+  const m = selectionMask(App.selection);
+  const out = newDocCanvas();
+  const x = out.getContext("2d", { willReadFrequently: true });
+  if (px > 0) {
+    x.globalCompositeOperation = "lighter";
+    for (let a = 0; a < Math.PI * 2; a += Math.PI / 8) {
+      x.drawImage(m, Math.cos(a) * px, Math.sin(a) * px);
+    }
+    x.globalCompositeOperation = "source-over";
+  } else if (px < 0) {
+    const r = -px;
+    const inv = newDocCanvas();
+    const ix = inv.getContext("2d", { willReadFrequently: true });
+    ix.fillStyle = "#fff";
+    ix.fillRect(0, 0, App.docW, App.docH);
+    ix.globalCompositeOperation = "destination-out";
+    ix.drawImage(m, 0, 0);
+    const grown = newDocCanvas();
+    const gx = grown.getContext("2d", { willReadFrequently: true });
+    gx.globalCompositeOperation = "lighter";
+    for (let a = 0; a < Math.PI * 2; a += Math.PI / 8) gx.drawImage(inv, Math.cos(a) * r, Math.sin(a) * r);
+    gx.globalCompositeOperation = "source-over";
+    const cut = newDocCanvas();
+    const cx = cut.getContext("2d", { willReadFrequently: true });
+    cx.fillStyle = "#fff";
+    cx.fillRect(0, 0, App.docW, App.docH);
+    cx.globalCompositeOperation = "destination-out";
+    cx.drawImage(grown, 0, 0);
+    x.drawImage(cut, 0, 0);
+  } else return;
+  setSelectionMask(out);
+  toast(px > 0 ? "Seleksi diperluas " + px + " px" : "Seleksi dikontraksi " + (-px) + " px");
+}
+function selContains(sel, x, y) {
+  if (!sel) return false;
+  const ix = Math.floor(x), iy = Math.floor(y);
+  if (ix < 0 || iy < 0 || ix >= App.docW || iy >= App.docH) return false;
+  if (sel.type === "rect") return x >= sel.x && x < sel.x + sel.w && y >= sel.y && y < sel.y + sel.h;
+  if (sel.type === "lasso") {
+    const p = sel.pts; let ins = false;
+    for (let i = 0, j = p.length - 1; i < p.length; j = i++) {
+      if ((p[i][1] > y) !== (p[j][1] > y) && x < (p[j][0] - p[i][0]) * (y - p[i][1]) / (p[j][1] - p[i][1]) + p[i][0]) ins = !ins;
+    }
+    return ins;
+  }
+  if (sel.type === "mask") {
+    const d = sel.mask.getContext("2d", { willReadFrequently: true }).getImageData(ix, iy, 1, 1).data;
+    return d[3] > 8;
+  }
+  return false;
+}
+function drawMaskedInto(ctx, src, mask) {
+  const t = newDocCanvas();
+  const tc = t.getContext("2d", { willReadFrequently: true });
+  tc.drawImage(src, 0, 0);
+  tc.globalCompositeOperation = "destination-in";
+  tc.drawImage(mask, 0, 0);
+  ctx.drawImage(t, 0, 0);
+}
+function eraseWithMask(l, mask) {
+  const t = newDocCanvas();
+  const tc = t.getContext("2d", { willReadFrequently: true });
+  tc.drawImage(l.canvas, 0, 0);
+  tc.globalCompositeOperation = "destination-out";
+  tc.drawImage(mask, 0, 0);
+  l.ctx.clearRect(0, 0, App.docW, App.docH);
+  l.ctx.drawImage(t, 0, 0);
+}
+
+/* ================= TONGKAT SIHIR ================= */
+function magicWandAt(x, y) {
+  const l = activeLayer();
+  if (!l || l.isGroup) return toast("Pilih lapisan biasa dulu", true);
+  x = Math.floor(x); y = Math.floor(y);
+  if (x < 0 || y < 0 || x >= App.docW || y >= App.docH) return;
+  const src = App.wandSampleAll ? compositeToCanvas(false) : l.canvas;
+  const img = src.getContext("2d", { willReadFrequently: true }).getImageData(0, 0, App.docW, App.docH);
+  const d = img.data, w = App.docW, h = App.docH;
+  const si = (y * w + x) * 4;
+  const sr = d[si], sg = d[si + 1], sb = d[si + 2], sa = d[si + 3];
+  const tol = App.wandTolerance * 2.55;
+  const match = i => {
+    const o = i * 4;
+    if (Math.abs(d[o + 3] - sa) > tol) return false;
+    if (sa === 0) return true;
+    return Math.abs(d[o] - sr) <= tol && Math.abs(d[o + 1] - sg) <= tol && Math.abs(d[o + 2] - sb) <= tol;
+  };
+  const mask = newDocCanvas();
+  const mctx = mask.getContext("2d", { willReadFrequently: true });
+  const out = mctx.createImageData(w, h);
+  const od = out.data;
+  if (App.wandContiguous) {
+    const seen = new Uint8Array(w * h);
+    const stack = [y * w + x];
+    while (stack.length) {
+      const i = stack.pop();
+      if (seen[i] || !match(i)) continue;
+      seen[i] = 1;
+      const px = i % w, py = (i / w) | 0;
+      od[i * 4] = 255; od[i * 4 + 1] = 255; od[i * 4 + 2] = 255; od[i * 4 + 3] = 255;
+      if (px > 0) stack.push(i - 1);
+      if (px < w - 1) stack.push(i + 1);
+      if (py > 0) stack.push(i - w);
+      if (py < h - 1) stack.push(i + w);
+    }
+  } else {
+    for (let i = 0; i < w * h; i++) {
+      if (match(i)) { od[i * 4] = 255; od[i * 4 + 1] = 255; od[i * 4 + 2] = 255; od[i * 4 + 3] = 255; }
+    }
+  }
+  mctx.putImageData(out, 0, 0);
+  setSelectionMask(mask);
+  toast("Seleksi tongkat sihir (toleransi " + App.wandTolerance + ")");
+}
+
+/* ================= CLIPBOARD (POTONG / SALIN / TEMPEL) ================= */
+function copySelection(silent) {
+  const l = activeLayer();
+  if (!l || l.isGroup) return toast("Pilih lapisan biasa dulu", true);
+  let box;
+  let mask = null;
+  if (App.selection) {
+    mask = selectionMask(App.selection);
+    box = App.selection.type === "mask" ? maskBBox(mask) : { x: App.selection.x, y: App.selection.y, w: App.selection.w, h: App.selection.h };
+  } else box = contentBBox(l);
+  if (!box || box.w < 1 || box.h < 1) return toast("Tidak ada isi untuk disalin", true);
+  box = { x: Math.max(0, Math.round(box.x)), y: Math.max(0, Math.round(box.y)), w: Math.round(box.w), h: Math.round(box.h) };
+  box.w = Math.min(box.w, App.docW - box.x); box.h = Math.min(box.h, App.docH - box.y);
+  const c = newDocCanvas(box.w, box.h);
+  const x = c.getContext("2d");
+  x.translate(-box.x, -box.y);
+  x.drawImage(l.canvas, 0, 0);
+  if (mask) { x.globalCompositeOperation = "destination-in"; x.drawImage(mask, 0, 0); }
+  App.clip = { canvas: c, x: box.x, y: box.y };
+  if (!silent) toast(`Disalin ${box.w}×${box.h} px`);
+}
+function cutSelection() {
+  const l = activeLayer();
+  if (!l || l.locked) return toast("Lapisan terkunci / tidak ada", true);
+  copySelection(true);
+  if (!App.clip) return;
+  if (App.selection) {
+    const mask = selectionMask(App.selection);
+    eraseWithMask(l, mask);
+  } else {
+    l.ctx.clearRect(0, 0, App.docW, App.docH);
+  }
+  pushHistory("Potong");
+  updateLayerThumbs();
+  App.dirty = true;
+  toast("Dipoting ke clipboard");
+}
+function pasteClipboard() {
+  if (!App.clip) return toast("Clipboard kosong — salin dulu (Ctrl+C)", true);
+  const l = activeLayer();
+  if (!l || l.isGroup) return toast("Pilih lapisan biasa dulu", true);
+  if (l.locked) return toast("Lapisan terkunci", true);
+  const can = cloneCanvas(App.clip.canvas);
+  const px = clamp(App.clip.x + 12, 0, Math.max(0, App.docW - can.width));
+  const py = clamp(App.clip.y + 12, 0, Math.max(0, App.docH - can.height));
+  App.floatSel = { canvas: can, x: px, y: py };
+  App.selection = { type: "rect", x: px, y: py, w: can.width, h: can.height };
+  App.tool = "move";
+  updateOptionsBar();
+  App.dirty = true;
+  toast("Tempel: seret untuk memindah, Enter untuk menetapkan");
+}
+function commitFloating() {
+  const l = activeLayer();
+  if (!App.floatSel || !l) return;
+  if (l.locked) return toast("Lapisan terkunci", true);
+  l.ctx.drawImage(App.floatSel.canvas, App.floatSel.x, App.floatSel.y);
+  const s = App.selection;
+  if (s) {
+    const ddx = App.floatSel.x - s.x, ddy = App.floatSel.y - s.y;
+    if (s.type === "lasso" && s.pts) App.selection = { type: "lasso", pts: s.pts.map(pt => [pt[0] + ddx, pt[1] + ddy]), x: App.floatSel.x, y: App.floatSel.y, w: App.floatSel.canvas.width, h: App.floatSel.canvas.height };
+    else if (s.type === "mask") {
+      const nm = newDocCanvas();
+      nm.getContext("2d").drawImage(s.mask, ddx, ddy);
+      App.selection = { type: "mask", mask: nm, x: App.floatSel.x, y: App.floatSel.y, w: App.floatSel.canvas.width, h: App.floatSel.canvas.height };
+    } else App.selection = { type: "rect", x: App.floatSel.x, y: App.floatSel.y, w: App.floatSel.canvas.width, h: App.floatSel.canvas.height };
+  }
+  App.floatSel = null;
+  pushHistory("Tempel / Pindah");
+  updateLayerThumbs();
+  App.dirty = true;
 }
 
 /* ================= FREE TRANSFORM ================= */
@@ -682,6 +956,7 @@ function evPos(e) {
 }
 
 view.addEventListener("pointerdown", e => {
+  if (e.button === 2) return;
   view.setPointerCapture(e.pointerId);
   App.pointers.set(e.pointerId, evPos(e));
   const p = App.pointers.get(e.pointerId);
@@ -755,13 +1030,30 @@ viewport.addEventListener("wheel", e => {
   zoomAt(e.deltaY < 0 ? 1.12 : 1 / 1.12, p.x, p.y);
 }, { passive: false });
 
-/* drag & drop file */
-viewport.addEventListener("dragover", e => e.preventDefault());
+/* drag & drop file (gambar / PSD / proyek) */
+viewport.addEventListener("dragover", e => { e.preventDefault(); viewport.classList.add("dropping"); });
+viewport.addEventListener("dragleave", () => viewport.classList.remove("dropping"));
 viewport.addEventListener("drop", e => {
   e.preventDefault();
-  const f = e.dataTransfer.files[0];
-  if (f && f.type.startsWith("image/")) openImageFile(f);
+  viewport.classList.remove("dropping");
+  const files = [...(e.dataTransfer.files || [])];
+  if (!files.length) return;
+  const img = files.find(f => f.type.startsWith("image/") || /\.(psd|json)$/i.test(f.name));
+  if (!img) return toast("Format file tidak didukung", true);
+  const asLayer = e.altKey || files.length > 1;
+  if (asLayer && img.type.startsWith("image/")) addImageAsLayer(img);
+  else openAnyFile(img);
 });
+
+/* menu klik kanan pada kanvas */
+view.addEventListener("contextmenu", e => {
+  e.preventDefault();
+  canvasContextMenu(e.clientX, e.clientY);
+});
+document.addEventListener("pointerdown", e => { if (ctxMenuEl && !ctxMenuEl.contains(e.target)) hideContextMenu(); }, true);
+window.addEventListener("blur", hideContextMenu);
+window.addEventListener("resize", hideContextMenu);
+viewport.addEventListener("scroll", hideContextMenu);
 
 function cancelStroke() {
   if (App.stroke) {
@@ -857,21 +1149,19 @@ function toolDown(e, p) {
         App.drag = { type: "float", dx: d.x - App.floatSel.x, dy: d.y - App.floatSel.y };
       } else if (App.selection) {
         const s = App.selection;
-        const inSel = s.type === "lasso"
-          ? (() => { const p = s.pts; let ins = false; for (let i = 0, j = p.length - 1; i < p.length; j = i++) { if ((p[i][1] > d.y) !== (p[j][1] > d.y) && d.x < (p[j][0] - p[i][0]) * (d.y - p[i][1]) / (p[j][1] - p[i][1]) + p[i][0]) ins = !ins; } return ins; })()
-          : (d.x >= s.x && d.x < s.x + s.w && d.y >= s.y && d.y < s.y + s.h);
-        if (inSel) {
-          const bx = s.x, by = s.y;
-          const c = document.createElement("canvas");
-          c.width = Math.max(1, Math.round(s.w)); c.height = Math.max(1, Math.round(s.h));
-          const c2 = c.getContext("2d");
+        if (selContains(s, d.x, d.y)) {
+          const mask = selectionMask(s);
+          const b = s.type === "mask" ? maskBBox(mask) : { x: s.x, y: s.y, w: s.w, h: s.h };
+          const bx = Math.max(0, Math.round(b.x)), by = Math.max(0, Math.round(b.y));
+          const bw = Math.max(1, Math.min(App.docW - bx, Math.round(b.w)));
+          const bh = Math.max(1, Math.min(App.docH - by, Math.round(b.h)));
+          const c = newDocCanvas(bw, bh);
+          const c2 = c.getContext("2d", { willReadFrequently: true });
           c2.translate(-bx, -by);
-          if (s.type === "lasso") { c2.clip(selPath2D(s)); }
           c2.drawImage(layer.canvas, 0, 0);
-          layer.ctx.save();
-          if (s.type === "lasso") layer.ctx.clip(selPath2D(s));
-          layer.ctx.clearRect(bx, by, s.w, s.h);
-          layer.ctx.restore();
+          c2.globalCompositeOperation = "destination-in";
+          c2.drawImage(mask, 0, 0);
+          eraseWithMask(layer, mask);
           App.floatSel = { canvas: c, x: bx, y: by };
           App.drag = { type: "float", dx: d.x - bx, dy: d.y - by };
         } else App.drag = null;
@@ -1062,18 +1352,7 @@ function toolUp(e, p) {
       break;
     }
     case "float": {
-      if (App.floatSel && layer) {
-        layer.ctx.drawImage(App.floatSel.canvas, App.floatSel.x, App.floatSel.y);
-        const s = App.selection;
-        if (s) {
-          const ddx = App.floatSel.x - s.x, ddy = App.floatSel.y - s.y;
-          if (s.type === "lasso" && s.pts) App.selection = { type: "lasso", pts: s.pts.map(pt => [pt[0] + ddx, pt[1] + ddy]), x: App.floatSel.x, y: App.floatSel.y, w: App.floatSel.canvas.width, h: App.floatSel.canvas.height };
-          else App.selection = { x: App.floatSel.x, y: App.floatSel.y, w: App.floatSel.canvas.width, h: App.floatSel.canvas.height, type: "rect" };
-        }
-        App.floatSel = null;
-        pushHistory("Pindah Seleksi");
-        updateLayerThumbs();
-      }
+      if (App.floatSel && layer) commitFloating();
       break;
     }
   }
@@ -1170,23 +1449,159 @@ function commitText(x, y, text) {
   if (cur) l.group = cur.isGroup ? cur.id : (cur.group || null);
   App.layers.splice(clamp(layerIndex(App.activeLayerId) + 1, 0, App.layers.length), 0, l);
   App.activeLayerId = l.id;
-  l.ctx.save();
-  l.ctx.globalAlpha = App.toolOpacity / 100;
-  l.ctx.fillStyle = App.color;
-  l.ctx.font = `${App.fontItalic ? "italic " : ""}${App.fontBold ? "bold " : ""}${App.fontSize}px "${App.fontFamily}"`;
-  l.ctx.textBaseline = "top";
-  l.ctx.fillText(text, x, y);
-  l.ctx.restore();
+  l.text = {
+    text, x, y, size: App.fontSize, family: App.fontFamily,
+    bold: App.fontBold, italic: App.fontItalic, color: App.color,
+    opacity: App.toolOpacity,
+  };
+  renderTextLayer(l);
   pushHistory("Teks (lapisan baru)");
   updateUI();
   App.dirty = true;
+}
+function renderTextLayer(l) {
+  if (!l.text) return;
+  const t = l.text;
+  l.ctx.clearRect(0, 0, App.docW, App.docH);
+  l.ctx.save();
+  l.ctx.globalAlpha = (t.opacity ?? 100) / 100;
+  l.ctx.fillStyle = t.color;
+  l.ctx.font = `${t.italic ? "italic " : ""}${t.bold ? "bold " : ""}${t.size}px "${t.family}"`;
+  l.ctx.textBaseline = "top";
+  l.ctx.fillText(t.text, t.x, t.y);
+  l.ctx.restore();
+}
+function editTextLayerDialog(l) {
+  if (!l || !l.text) return toast("Lapisan ini bukan teks", true);
+  const t = l.text;
+  showModal("Edit Teks", `
+    <div class="field"><label>Isi teks</label><input type="text" id="et-text" value="${t.text.replace(/"/g, "&quot;")}"></div>
+    <div class="field-row">
+      <div class="field"><label>Ukuran (px)</label><input type="number" id="et-size" min="6" max="400" value="${t.size}"></div>
+      <div class="field"><label>Warna</label><input type="color" id="et-color" value="${t.color}"></div>
+    </div>
+    <p style="color:var(--text2)">Tip: geser lapisan dengan alat Pindah setelah teks diperbarui.</p>`, [
+    { label: "Batal", onClick: () => {} },
+    { label: "Simpan", primary: true, onClick: () => {
+      const v = $("#et-text").value;
+      if (!v.trim()) return toast("Teks kosong", true);
+      l.text.text = v;
+      l.text.size = clamp(+$("#et-size").value || t.size, 6, 400);
+      l.text.color = $("#et-color").value;
+      l.name = "Teks: " + v.slice(0, 18);
+      renderTextLayer(l);
+      pushHistory("Edit Teks");
+      updateUI();
+      App.dirty = true;
+    }},
+  ]);
+}
+function dialogLayerStyle() {
+  const l = activeLayer();
+  if (!l || l.isGroup) return toast("Pilih lapisan biasa dulu", true);
+  const orig = l.style ? JSON.parse(JSON.stringify(l.style)) : null;
+  const st = l.style = l.style || {};
+  st.stroke = Object.assign({ on: false, color: "#000000", size: 3 }, st.stroke);
+  st.shadow = Object.assign({ on: false, color: "#000000", blur: 8, x: 4, y: 4 }, st.shadow);
+  st.glow = Object.assign({ on: false, color: "#ffd34d", blur: 14 }, st.glow);
+  showModal("Gaya Lapisan (Fx)", `
+    <div class="field"><label class="chk"><input type="checkbox" id="fx-stroke" ${st.stroke.on ? "checked" : ""}> Tepi / Outline</label>
+      <div class="field-row" style="align-items:center;margin-top:6px">
+        <input type="color" id="fx-stroke-color" value="${st.stroke.color}" title="Warna tepi">
+        <input type="range" id="fx-stroke-size" min="1" max="20" value="${st.stroke.size}">
+        <span id="fxv-stroke">${st.stroke.size} px</span>
+      </div>
+    </div>
+    <div class="field"><label class="chk"><input type="checkbox" id="fx-shadow" ${st.shadow.on ? "checked" : ""}> Bayangan Jatuh (Drop Shadow)</label>
+      <div class="field-row" style="align-items:center;margin-top:6px">
+        <input type="color" id="fx-shadow-color" value="${st.shadow.color}">
+        <input type="range" id="fx-shadow-blur" min="0" max="60" value="${st.shadow.blur}">
+        <span id="fxv-shadow">${st.shadow.blur}</span>
+      </div>
+      <div class="field-row" style="margin-top:4px">
+        <label style="color:var(--text2);font-size:11px">Geser X <input type="number" id="fx-shadow-x" value="${st.shadow.x}" style="width:64px"></label>
+        <label style="color:var(--text2);font-size:11px">Geser Y <input type="number" id="fx-shadow-y" value="${st.shadow.y}" style="width:64px"></label>
+      </div>
+    </div>
+    <div class="field"><label class="chk"><input type="checkbox" id="fx-glow" ${st.glow.on ? "checked" : ""}> Cahaya Luar (Outer Glow)</label>
+      <div class="field-row" style="align-items:center;margin-top:6px">
+        <input type="color" id="fx-glow-color" value="${st.glow.color}">
+        <input type="range" id="fx-glow-blur" min="0" max="80" value="${st.glow.blur}">
+        <span id="fxv-glow">${st.glow.blur}</span>
+      </div>
+    </div>
+    <p style="color:var(--text2)">Gaya ikut terekspor ke PNG/JPEG/WebP. PSD menyimpan hasil piksel.</p>`, [
+    { label: "Hapus Gaya", onClick: () => { delete l.style; App.dirty = true; toast("Gaya lapisan dihapus"); } },
+    { label: "Batal", onClick: () => { l.style = orig; App.dirty = true; } },
+    { label: "Oke", primary: true, onClick: () => { pushHistory("Gaya Lapisan"); App.dirty = true; } },
+  ]);
+  const read = () => {
+    st.stroke.on = $("#fx-stroke").checked;
+    st.stroke.color = $("#fx-stroke-color").value;
+    st.stroke.size = +$("#fx-stroke-size").value;
+    st.shadow.on = $("#fx-shadow").checked;
+    st.shadow.color = $("#fx-shadow-color").value;
+    st.shadow.blur = +$("#fx-shadow-blur").value;
+    st.shadow.x = +$("#fx-shadow-x").value || 0;
+    st.shadow.y = +$("#fx-shadow-y").value || 0;
+    st.glow.on = $("#fx-glow").checked;
+    st.glow.color = $("#fx-glow-color").value;
+    st.glow.blur = +$("#fx-glow-blur").value;
+    $("#fxv-stroke").textContent = st.stroke.size + " px";
+    $("#fxv-shadow").textContent = st.shadow.blur;
+    $("#fxv-glow").textContent = st.glow.blur;
+    App.dirty = true;
+  };
+  ["fx-stroke", "fx-stroke-color", "fx-stroke-size", "fx-shadow", "fx-shadow-color", "fx-shadow-blur", "fx-shadow-x", "fx-shadow-y", "fx-glow", "fx-glow-color", "fx-glow-blur"].forEach(id => {
+    const el = $("#" + id);
+    if (el) el.addEventListener("input", read);
+  });
+}
+function addMaskFromSelection() {
+  const l = activeLayer();
+  if (!l || l.isGroup) return toast("Pilih lapisan biasa dulu", true);
+  if (!App.selection) return toast("Buat seleksi dulu (Tongkat Sihir / Marquee)", true);
+  l.mask = cloneCanvas(selectionMask(App.selection));
+  l.maskOn = true;
+  pushHistory("Mask dari Seleksi");
+  updateUI();
+  App.dirty = true;
+  toast("Mask ditambahkan — bagian luar seleksi disembunyikan");
+}
+function toggleLayerMask() {
+  const l = activeLayer();
+  if (!l || !l.mask) return toast("Lapisan ini belum punya mask", true);
+  l.maskOn = l.maskOn === false;
+  pushHistory(l.maskOn ? "Aktifkan Mask" : "Nonaktifkan Mask");
+  App.dirty = true;
+  toast("Mask " + (l.maskOn === false ? "nonaktif" : "aktif"));
+}
+function deleteLayerMask() {
+  const l = activeLayer();
+  if (!l || !l.mask) return toast("Lapisan ini belum punya mask", true);
+  l.mask = null; l.maskOn = true;
+  pushHistory("Hapus Mask");
+  App.dirty = true;
+  toast("Mask dihapus");
 }
 
 /* ================= EDIT ACTIONS ================= */
 function fillWith(hex, clear) {
   const l = activeLayer(); if (!l || l.locked) return toast("Lapisan terkunci / tidak ada", true);
   if (l.isGroup) return toast("Folder aktif — pilih lapisan biasa", true);
-  if (App.selection && App.selection.type === "lasso") {
+  if (App.selection && App.selection.type === "mask") {
+    const mask = selectionMask(App.selection);
+    if (clear) eraseWithMask(l, mask);
+    else {
+      const t = newDocCanvas();
+      const tc = t.getContext("2d");
+      tc.fillStyle = hex;
+      tc.fillRect(0, 0, App.docW, App.docH);
+      tc.globalCompositeOperation = "destination-in";
+      tc.drawImage(mask, 0, 0);
+      l.ctx.drawImage(t, 0, 0);
+    }
+  } else if (App.selection && App.selection.type === "lasso") {
     l.ctx.save();
     l.ctx.clip(selPath2D(App.selection));
     if (clear) l.ctx.clearRect(App.selection.x, App.selection.y, App.selection.w, App.selection.h);
@@ -1203,7 +1618,9 @@ function fillWith(hex, clear) {
 function clearAction() {
   const l = activeLayer(); if (!l || l.locked) return toast("Lapisan terkunci / tidak ada", true);
   if (l.isGroup) return toast("Folder aktif — pilih lapisan biasa", true);
-  if (App.selection && App.selection.type === "lasso") {
+  if (App.selection && App.selection.type === "mask") {
+    eraseWithMask(l, selectionMask(App.selection));
+  } else if (App.selection && App.selection.type === "lasso") {
     l.ctx.save();
     l.ctx.clip(selPath2D(App.selection));
     l.ctx.clearRect(App.selection.x, App.selection.y, App.selection.w, App.selection.h);
@@ -1215,18 +1632,45 @@ function clearAction() {
   pushHistory("Hapus");
   updateLayerThumbs(); App.dirty = true;
 }
-function selectAll() { App.selection = { x: 0, y: 0, w: App.docW, h: App.docH }; App.dirty = true; }
-function deselect() { App.selection = null; App.floatSel = null; App.dirty = true; }
+function selectAll() { App.selection = { type: "rect", x: 0, y: 0, w: App.docW, h: App.docH }; App.dirty = true; updateOptionsBar(); }
+function deselect() { App.selection = null; App.floatSel = null; App.dirty = true; updateOptionsBar(); }
+function dialogFeather() {
+  if (!App.selection) return toast("Tidak ada seleksi", true);
+  showModal("Haluskan Tepi Seleksi (Feather)", `
+    <div class="field"><label>Radius <span id="ft-v">4</span> px</label>
+      <input type="range" id="ft-r" min="1" max="60" value="4"></div>
+    <p style="color:var(--text2)">Membuat tepi seleksi menjadi lembut (gradasi).</p>`, [
+    { label: "Batal", onClick: () => {} },
+    { label: "Terapkan", primary: true, onClick: () => featherSelection(+$("#ft-r").value) },
+  ]);
+  $("#ft-r").addEventListener("input", e => { $("#ft-v").textContent = e.target.value; });
+}
+function dialogGrow(contract) {
+  if (!App.selection) return toast("Tidak ada seleksi", true);
+  showModal(contract ? "Kontraksi Seleksi" : "Perluas Seleksi", `
+    <div class="field"><label>Jumlah <span id="gw-v">4</span> px</label>
+      <input type="range" id="gw-r" min="1" max="50" value="4"></div>`, [
+    { label: "Batal", onClick: () => {} },
+    { label: "Terapkan", primary: true, onClick: () => growSelection(contract ? -(+$("#gw-r").value) : +$("#gw-r").value) },
+  ]);
+  $("#gw-r").addEventListener("input", e => { $("#gw-v").textContent = e.target.value; });
+}
 
 function applyCrop() {
   const r = App.cropRect; if (!r) return;
   const nw = Math.max(1, Math.round(r.w)), nh = Math.max(1, Math.round(r.h));
-  for (const l of App.layers) {
-    const nc = document.createElement("canvas");
-    nc.width = nw; nc.height = nh;
-    nc.getContext("2d").drawImage(l.canvas, r.x, r.y, nw, nh, 0, 0, nw, nh);
-    l.canvas = nc; l.ctx = makeCtx(nc);
-  }
+    for (const l of App.layers) {
+      const nc = document.createElement("canvas");
+      nc.width = nw; nc.height = nh;
+      nc.getContext("2d").drawImage(l.canvas, r.x, r.y, nw, nh, 0, 0, nw, nh);
+      l.canvas = nc; l.ctx = makeCtx(nc);
+      if (l.mask) {
+        const nm = document.createElement("canvas");
+        nm.width = nw; nm.height = nh;
+        nm.getContext("2d").drawImage(l.mask, r.x, r.y, nw, nh, 0, 0, nw, nh);
+        l.mask = nm;
+      }
+    }
   App.docW = nw; App.docH = nh;
   ensureComposite();
   App.cropRect = null; App.selection = null;
@@ -1240,11 +1684,66 @@ function resizeImage(nw, nh) {
     nc.width = nw; nc.height = nh;
     nc.getContext("2d").drawImage(l.canvas, 0, 0, nw, nh);
     l.canvas = nc; l.ctx = makeCtx(nc);
+    if (l.mask) {
+      const nm = document.createElement("canvas");
+      nm.width = nw; nm.height = nh;
+      nm.getContext("2d").drawImage(l.mask, 0, 0, nw, nh);
+      l.mask = nm;
+    }
   }
   App.docW = nw; App.docH = nh;
   ensureComposite();
   fitView();
   pushHistory("Ukuran Gambar"); updateUI();
+}
+function resizeCanvas(nw, nh, ax, ay) {
+  nw = clamp(Math.round(nw), 1, 30000); nh = clamp(Math.round(nh), 1, 30000);
+  const dx = Math.round((nw - App.docW) * ax);
+  const dy = Math.round((nh - App.docH) * ay);
+  for (const l of App.layers) {
+    const nc = document.createElement("canvas");
+    nc.width = nw; nc.height = nh;
+    nc.getContext("2d").drawImage(l.canvas, dx, dy);
+    l.canvas = nc; l.ctx = makeCtx(nc);
+    if (l.mask) {
+      const nm = document.createElement("canvas");
+      nm.width = nw; nm.height = nh;
+      nm.getContext("2d").drawImage(l.mask, dx, dy);
+      l.mask = nm;
+    }
+  }
+  App.docW = nw; App.docH = nh;
+  App.selection = null; App.cropRect = null; App.floatSel = null;
+  ensureComposite();
+  fitView();
+  pushHistory("Ukuran Kanvas"); updateUI();
+  toast(`Kanvas diubah menjadi ${nw} × ${nh} px`);
+}
+function dialogCanvasSize() {
+  showModal("Ukuran Kanvas", `
+    <div class="field-row">
+      <div class="field"><label>Lebar (px)</label><input type="number" id="cs-w" min="1" max="30000" value="${App.docW}"></div>
+      <div class="field"><label>Tinggi (px)</label><input type="number" id="cs-h" min="1" max="30000" value="${App.docH}"></div>
+    </div>
+    <div class="field"><label>Jangkar (posisi gambar lama)</label>
+      <div class="anchor-grid" id="cs-anchor">
+        ${[0, 1, 2].map(r => [0, 1, 2].map(c => `<button data-x="${c / 2}" data-y="${r / 2}" class="${r === 1 && c === 1 ? "on" : ""}"></button>`).join("")).join("")}
+      </div>
+    </div>
+    <p style="color:var(--text2)">Isi kanvas baru akan transparan. Gunakan ini untuk memperluas area gambar tanpa mengubah ukuran isi.</p>`, [
+    { label: "Batal", onClick: () => {} },
+    { label: "Terapkan", primary: true, onClick: () => {
+      const ax = +($("#cs-anchor .on")?.dataset.x ?? 0.5);
+      const ay = +($("#cs-anchor .on")?.dataset.y ?? 0.5);
+      resizeCanvas(+$("#cs-w").value || App.docW, +$("#cs-h").value || App.docH, ax, ay);
+    }},
+  ]);
+  $("#cs-anchor").addEventListener("click", e => {
+    const b = e.target.closest("button");
+    if (!b) return;
+    $("#cs-anchor").querySelectorAll("button").forEach(x => x.classList.remove("on"));
+    b.classList.add("on");
+  });
 }
 
 /* ================= FILTERS / ADJUSTMENTS ================= */
@@ -1547,6 +2046,247 @@ function dialogMosaic() {
     App.dirty = true;
   });
 }
+function dialogMotionBlur() {
+  const l = activeLayer();
+  if (!l || l.locked) return toast("Lapisan terkunci / tidak ada", true);
+  const orig = cloneCanvas(l.canvas);
+  showModal("Motion Blur", `
+    <label class="adj-label">Sudut <span class="adj-val" id="adjv-a">0°</span>
+      <input type="range" id="adj-a" min="0" max="360" value="0"></label>
+    <label class="adj-label">Jarak <span class="adj-val" id="adjv-d">12</span> px
+      <input type="range" id="adj-d" min="1" max="120" value="12"></label>`, [
+    { label: "Batal", onClick: () => { l.ctx.clearRect(0, 0, App.docW, App.docH); l.ctx.drawImage(orig, 0, 0); App.dirty = true; } },
+    { label: "Oke", primary: true, onClick: () => { pushHistory("Motion Blur"); updateLayerThumbs(); } },
+  ]);
+  const run = () => {
+    const a = +$("#adj-a").value * Math.PI / 180, dist = +$("#adj-d").value;
+    const dx = Math.cos(a), dy = Math.sin(a);
+    l.ctx.clearRect(0, 0, App.docW, App.docH);
+    const steps = Math.max(4, Math.round(dist));
+    l.ctx.globalAlpha = 1 / steps;
+    for (let i = 0; i < steps; i++) {
+      const t = i / (steps - 1) - 0.5;
+      l.ctx.drawImage(orig, dx * dist * t, dy * dist * t);
+    }
+    l.ctx.globalAlpha = 1;
+    App.dirty = true;
+  };
+  ["a", "d"].forEach(id => $("#adj-" + id).addEventListener("input", e => {
+    if (id === "a") $("#adjv-a").textContent = e.target.value + "°";
+    else $("#adjv-d").textContent = e.target.value;
+    run();
+  }));
+  run();
+}
+function dialogReduceNoise() {
+  const l = activeLayer();
+  if (!l || l.locked) return toast("Lapisan terkunci / tidak ada", true);
+  const orig = l.ctx.getImageData(0, 0, App.docW, App.docH);
+  showModal("Reduce Noise", `
+    <label class="adj-label">Kekuatan <span class="adj-val" id="adjv-n">40</span>%
+      <input type="range" id="adj-n" min="0" max="100" value="40"></label>
+    <p style="color:var(--text2)">Median 3×3 untuk menghilangkan bintik/noise.</p>`, [
+    { label: "Batal", onClick: () => { l.ctx.putImageData(orig, 0, 0); App.dirty = true; } },
+    { label: "Oke", primary: true, onClick: () => { pushHistory("Reduce Noise"); updateLayerThumbs(); } },
+  ]);
+  $("#adj-n").addEventListener("input", e => {
+    $("#adjv-n").textContent = e.target.value;
+    const amount = +e.target.value / 100;
+    const w = App.docW, h = App.docH, s = orig.data;
+    const out = new ImageData(w, h);
+    const d = out.data;
+    d.set(s);
+    if (amount <= 0) { l.ctx.putImageData(out, 0, 0); App.dirty = true; return; }
+    const med = new Uint8Array(9);
+    for (let y = 0; y < h; y++) {
+      for (let x = 0; x < w; x++) {
+        const i = (y * w + x) * 4;
+        if (s[i + 3] === 0) continue;
+        for (let c = 0; c < 3; c++) {
+          let k = 0;
+          for (let oy = -1; oy <= 1; oy++) {
+            const yy = clamp(y + oy, 0, h - 1);
+            for (let ox = -1; ox <= 1; ox++) {
+              const xx = clamp(x + ox, 0, w - 1);
+              med[k++] = s[(yy * w + xx) * 4 + c];
+            }
+          }
+          const arr = Array.from(med).sort((a, b) => a - b);
+          d[i + c] = s[i + c] + (arr[4] - s[i + c]) * amount;
+        }
+      }
+    }
+    l.ctx.putImageData(out, 0, 0);
+    App.dirty = true;
+  });
+}
+function applyClouds() {
+  withLayer("Clouds", l => {
+    const w = App.docW, h = App.docH;
+    const img = l.ctx.createImageData(w, h);
+    const d = img.data;
+    const a = hexToRgb(App.color), b = hexToRgb(App.secondary);
+    const grid = [];
+    let size = 64, rand = 12345;
+    const rnd = () => { rand = (rand * 1103515245 + 12345) & 0x7fffffff; return rand / 0x7fffffff; };
+    for (let k = 0; k < 4; k++) {
+      const gw = Math.ceil(w / size) + 2, gh = Math.ceil(h / size) + 2;
+      const g = new Float32Array(gw * gh);
+      for (let i = 0; i < g.length; i++) g[i] = rnd();
+      grid.push({ g, gw, gh, size });
+      size = Math.max(2, size / 2);
+    }
+    const smooth = t => t * t * (3 - 2 * t);
+    for (let y = 0; y < h; y++) {
+      for (let x = 0; x < w; x++) {
+        let v = 0, amp = 1, tot = 0;
+        for (const { g, gw, gh, size: s } of grid) {
+          const fx = x / s, fy = y / s;
+          const x0 = Math.floor(fx), y0 = Math.floor(fy);
+          const tx = smooth(fx - x0), ty = smooth(fy - y0);
+          const i00 = g[y0 * gw + x0], i10 = g[y0 * gw + Math.min(gw - 1, x0 + 1)];
+          const i01 = g[Math.min(gh - 1, y0 + 1) * gw + x0], i11 = g[Math.min(gh - 1, y0 + 1) * gw + Math.min(gw - 1, x0 + 1)];
+          const a1 = i00 + (i10 - i00) * tx, a2 = i01 + (i11 - i01) * tx;
+          v += (a1 + (a2 - a1) * ty) * amp;
+          tot += amp; amp *= 0.5;
+        }
+        v /= tot;
+        const i = (y * w + x) * 4;
+        d[i] = a.r + (b.r - a.r) * v;
+        d[i + 1] = a.g + (b.g - a.g) * v;
+        d[i + 2] = a.b + (b.b - a.b) * v;
+        d[i + 3] = 255;
+      }
+    }
+    l.ctx.putImageData(img, 0, 0);
+  });
+}
+function dialogExposure() {
+  openAdjustDialog("Eksposur", [
+    { id: "ev", label: "Eksposur (EV ×10)", min: -30, max: 30, value: 0 },
+    { id: "off", label: "Offset", min: -100, max: 100, value: 0 },
+    { id: "g", label: "Gamma (x10)", min: 2, max: 30, value: 10 },
+  ], (orig, v, l) => {
+    const out = l.ctx.createImageData(orig.width, orig.height);
+    const s = orig.data, d = out.data;
+    const mult = Math.pow(2, v.ev / 10), gamma = v.g / 10;
+    for (let i = 0; i < s.length; i += 4) {
+      for (let c = 0; c < 3; c++) {
+        let x = clamp(s[i + c] * mult + v.off * 2.55, 0, 255);
+        d[i + c] = clamp(255 * Math.pow(x / 255, 1 / gamma), 0, 255);
+      }
+      d[i + 3] = s[i + 3];
+    }
+    l.ctx.putImageData(out, 0, 0);
+  });
+}
+function dialogVibrance() {
+  openAdjustDialog("Vibrance / Saturasi", [
+    { id: "v", label: "Vibrance", min: -100, max: 100, value: 0 },
+    { id: "s", label: "Saturasi", min: -100, max: 100, value: 0 },
+  ], (orig, v, l) => {
+    const out = l.ctx.createImageData(orig.width, orig.height);
+    const s = orig.data, d = out.data;
+    for (let i = 0; i < s.length; i += 4) {
+      const r = s[i], g = s[i + 1], b = s[i + 2];
+      const mx = Math.max(r, g, b), mn = Math.min(r, g, b);
+      const sat = mx === 0 ? 0 : (mx - mn) / mx;
+      const boost = 1 + (v.s / 100) + (v.v / 100) * (1 - sat);
+      const avg = (r + g + b) / 3;
+      d[i] = clamp(avg + (r - avg) * boost, 0, 255);
+      d[i + 1] = clamp(avg + (g - avg) * boost, 0, 255);
+      d[i + 2] = clamp(avg + (b - avg) * boost, 0, 255);
+      d[i + 3] = s[i + 3];
+    }
+    l.ctx.putImageData(out, 0, 0);
+  });
+}
+function dialogThreshold() {
+  openAdjustDialog("Threshold (Hitam-Putih)", [
+    { id: "t", label: "Ambang", min: 1, max: 254, value: 128 },
+  ], (orig, v, l) => {
+    const out = l.ctx.createImageData(orig.width, orig.height);
+    const s = orig.data, d = out.data;
+    for (let i = 0; i < s.length; i += 4) {
+      const lum = s[i] * 0.299 + s[i + 1] * 0.587 + s[i + 2] * 0.114;
+      const val = lum >= v.t ? 255 : 0;
+      d[i] = d[i + 1] = d[i + 2] = val;
+      d[i + 3] = s[i + 3];
+    }
+    l.ctx.putImageData(out, 0, 0);
+  });
+}
+function dialogPosterize() {
+  openAdjustDialog("Posterize", [
+    { id: "n", label: "Jumlah Level", min: 2, max: 32, value: 6 },
+  ], (orig, v, l) => {
+    const out = l.ctx.createImageData(orig.width, orig.height);
+    const s = orig.data, d = out.data;
+    const n = Math.max(2, v.n), step = 255 / (n - 1);
+    for (let i = 0; i < s.length; i += 4) {
+      for (let c = 0; c < 3; c++) d[i + c] = Math.round(Math.round(s[i + c] / step) * step);
+      d[i + 3] = s[i + 3];
+    }
+    l.ctx.putImageData(out, 0, 0);
+  });
+}
+function dialogColorBalance() {
+  openAdjustDialog("Keseimbangan Warna", [
+    { id: "r", label: "Merah ↔ Cyan", min: -100, max: 100, value: 0 },
+    { id: "g", label: "Hijau ↔ Magenta", min: -100, max: 100, value: 0 },
+    { id: "b", label: "Biru ↔ Kuning", min: -100, max: 100, value: 0 },
+  ], (orig, v, l) => {
+    const out = l.ctx.createImageData(orig.width, orig.height);
+    const s = orig.data, d = out.data;
+    for (let i = 0; i < s.length; i += 4) {
+      const lum = (s[i] * 0.299 + s[i + 1] * 0.587 + s[i + 2] * 0.114) / 255;
+      const w = 0.35 + 0.65 * Math.sin(Math.PI * lum);
+      d[i] = clamp(s[i] + v.r * 2.55 * w, 0, 255);
+      d[i + 1] = clamp(s[i + 1] + v.g * 2.55 * w, 0, 255);
+      d[i + 2] = clamp(s[i + 2] + v.b * 2.55 * w, 0, 255);
+      d[i + 3] = s[i + 3];
+    }
+    l.ctx.putImageData(out, 0, 0);
+  });
+}
+function applyAutoContrast() {
+  withLayer("Auto Kontras", l => {
+    const img = l.ctx.getImageData(0, 0, App.docW, App.docH);
+    const d = img.data;
+    let mn = 255, mx = 0;
+    for (let i = 0; i < d.length; i += 4) {
+      if (d[i + 3] === 0) continue;
+      const lum = d[i] * 0.299 + d[i + 1] * 0.587 + d[i + 2] * 0.114;
+      if (lum < mn) mn = lum;
+      if (lum > mx) mx = lum;
+    }
+    const span = Math.max(1, mx - mn);
+    for (let i = 0; i < d.length; i += 4) {
+      for (let c = 0; c < 3; c++) d[i + c] = clamp((d[i + c] - mn) * 255 / span, 0, 255);
+    }
+    l.ctx.putImageData(img, 0, 0);
+  });
+}
+function applyAutoTone() {
+  withLayer("Auto Tone", l => {
+    const img = l.ctx.getImageData(0, 0, App.docW, App.docH);
+    const d = img.data;
+    for (let c = 0; c < 3; c++) {
+      const hist = new Uint32Array(256);
+      let total = 0;
+      for (let i = 0; i < d.length; i += 4) if (d[i + 3] > 0) { hist[d[i + c]]++; total++; }
+      if (!total) continue;
+      const lo = total * 0.005, hi = total * 0.995;
+      let acc = 0, mn = 0, mx = 255;
+      for (let v = 0; v < 256; v++) { acc += hist[v]; if (acc >= lo) { mn = v; break; } }
+      acc = 0;
+      for (let v = 255; v >= 0; v--) { acc += hist[v]; if (acc >= total - hi) { mx = v; break; } }
+      const span = Math.max(1, mx - mn);
+      for (let i = 0; i < d.length; i += 4) d[i + c] = clamp((d[i + c] - mn) * 255 / span, 0, 255);
+    }
+    l.ctx.putImageData(img, 0, 0);
+  });
+}
 function dialogLevels() {
   openAdjustDialog("Levels", [
     { id: "bp", label: "Titik Hitam", min: 0, max: 250, value: 0 },
@@ -1571,17 +2311,73 @@ function dialogLevels() {
 function loadImage(src) {
   return new Promise((res, rej) => { const i = new Image(); i.onload = () => res(i); i.onerror = rej; i.src = src; });
 }
-async function saveProject() {
-  const data = {
-    v: 1, w: App.docW, h: App.docH,
+function serializeProject() {
+  return {
+    v: 2, w: App.docW, h: App.docH,
     activeIndex: Math.max(0, layerIndex(App.activeLayerId)),
-    layers: App.layers.map((l, i) => ({
+    layers: App.layers.map(l => ({
       name: l.name, visible: l.visible, opacity: l.opacity, locked: l.locked,
       blendMode: l.blendMode, isGroup: !!l.isGroup,
       group: l.group != null ? App.layers.findIndex(x => x.id === l.group) : null,
-      expanded: l.expanded !== false, data: l.canvas.toDataURL("image/png"),
+      expanded: l.expanded !== false,
+      style: l.style || null,
+      text: l.text || null,
+      mask: l.mask ? l.mask.toDataURL("image/png") : null,
+      maskOn: l.maskOn !== false,
+      data: l.canvas.toDataURL("image/png"),
     })),
   };
+}
+async function applyProjectData(data) {
+  if (!data || !data.layers || !data.w) throw new Error("format");
+  const layers = [];
+  const idMap = new Map();
+  const styleMap = new Map();
+  for (let i = 0; i < data.layers.length; i++) {
+    const sl = data.layers[i];
+    const c = document.createElement("canvas");
+    c.width = data.w; c.height = data.h;
+    const ctx = c.getContext("2d");
+    if (sl.data && !sl.isGroup) {
+      const img = await loadImage(sl.data);
+      ctx.drawImage(img, 0, 0);
+    }
+    const l = {
+      id: uid(), name: sl.name, visible: sl.visible !== false, opacity: sl.opacity == null ? 100 : sl.opacity,
+      locked: !!sl.locked, blendMode: sl.blendMode || "source-over", canvas: c, ctx: makeCtx(c),
+      isGroup: !!sl.isGroup, group: null, expanded: sl.expanded !== false,
+      style: sl.style || null, text: sl.text || null, mask: null, maskOn: sl.maskOn !== false,
+    };
+    if (l.isGroup) { l.style = null; l.text = null; }
+    if (sl.mask) {
+      try {
+        const m = await loadImage(sl.mask);
+        const mc = document.createElement("canvas");
+        mc.width = data.w; mc.height = data.h;
+        mc.getContext("2d").drawImage(m, 0, 0);
+        l.mask = mc;
+      } catch (e) { l.mask = null; }
+    }
+    idMap.set(i, l);
+    styleMap.set(i, sl);
+    layers.push(l);
+  }
+  layers.forEach((l, i) => {
+    const sl = styleMap.get(i);
+    if (sl.group != null && idMap.has(sl.group)) l.group = idMap.get(sl.group).id;
+  });
+  App.docW = data.w; App.docH = data.h;
+  ensureComposite();
+  App.layers = layers;
+  App.activeLayerId = (layers[clamp(data.activeIndex || 0, 0, layers.length - 1)] || layers[0]).id;
+  App.selection = null; App.cropRect = null; App.floatSel = null; App.transform = null;
+  App.history = []; App.historyIndex = -1;
+  pushHistory("Buka Proyek");
+  fitView(); updateUI();
+  $("#empty-hint").classList.add("hide");
+}
+async function saveProject() {
+  const data = serializeProject();
   const blob = new Blob([JSON.stringify(data)], { type: "application/json" });
   const a = document.createElement("a");
   a.download = "proyek-pslite.json";
@@ -1592,40 +2388,46 @@ async function saveProject() {
 }
 async function openProjectFile(file) {
   try {
-    const data = JSON.parse(await file.text());
-    if (!data.layers || !data.w) throw new Error("format");
-    const layers = [];
-    const idMap = new Map();
-    for (const sl of data.layers) {
-      const img = await loadImage(sl.data);
-      const c = document.createElement("canvas");
-      c.width = data.w; c.height = data.h;
-      c.getContext("2d").drawImage(img, 0, 0);
-      const nid = uid();
-      idMap.set(sl.__i, nid);
-      layers.push({
-        id: nid, name: sl.name, visible: sl.visible, opacity: sl.opacity,
-        locked: sl.locked, blendMode: sl.blendMode || "source-over", canvas: c, ctx: makeCtx(c),
-        isGroup: !!sl.isGroup, group: null, expanded: sl.expanded !== false, __i: layers.length,
-      });
-    }
-    layers.forEach((l, i) => {
-      const sl = data.layers[i];
-      if (sl.group != null) l.group = idMap.get(sl.group) || null;
-    });
-    App.docW = data.w; App.docH = data.h;
-    ensureComposite();
-    App.layers = layers;
-    App.activeLayerId = (layers[clamp(data.activeIndex || 0, 0, layers.length - 1)] || layers[0]).id;
-    App.selection = null; App.cropRect = null; App.floatSel = null; App.transform = null;
-    App.history = []; App.historyIndex = -1;
-    pushHistory("Buka Proyek");
-    fitView(); updateUI();
-    $("#empty-hint").classList.add("hide");
+    await applyProjectData(JSON.parse(await file.text()));
     toast("Proyek dibuka: " + file.name);
   } catch (err) {
     toast("File proyek rusak / format tidak dikenal", true);
   }
+}
+/* ---- autosave & pemulihan ---- */
+let autosaveTimer = null;
+function autosaveTick(silent) {
+  try {
+    if (App.history.length <= 1) return;
+    const data = serializeProject();
+    const json = JSON.stringify(data);
+    if (json.length > 4.5 * 1024 * 1024) return;
+    localStorage.setItem("pslite.autosave", json);
+    localStorage.setItem("pslite.autosave.at", String(Date.now()));
+    if (!silent) toast("Autosave: proyek dicadangkan");
+  } catch (e) { /* kuota penuh — abaikan */ }
+}
+function startAutosave() {
+  if (autosaveTimer) return;
+  autosaveTimer = setInterval(() => autosaveTick(true), 60000);
+}
+function checkAutosave() {
+  let raw = null, at = 0;
+  try { raw = localStorage.getItem("pslite.autosave"); at = +(localStorage.getItem("pslite.autosave.at") || 0); } catch (e) {}
+  if (!raw) return;
+  const when = at ? new Date(at).toLocaleString("id-ID") : "tidak diketahui";
+  showModal("Pulihkan Pekerjaan Terakhir?", `
+    <p style="color:var(--text2)">Ditemukan cadangan otomatis (autosave) dari <b>${when}</b>.</p>
+    <p style="color:var(--text2)">Pulihkan sekarang? Dokumen yang sedang terbuka akan diganti.</p>`, [
+    { label: "Hapus cadangan", onClick: () => { try { localStorage.removeItem("pslite.autosave"); localStorage.removeItem("pslite.autosave.at"); } catch (e) {} toast("Cadangan dihapus"); } },
+    { label: "Nanti", onClick: () => {} },
+    { label: "Pulihkan", primary: true, onClick: async () => {
+      try {
+        await applyProjectData(JSON.parse(localStorage.getItem("pslite.autosave")));
+        toast("Pekerjaan dipulihkan");
+      } catch (e) { toast("Gagal memulihkan cadangan", true); }
+    }},
+  ]);
 }
 
 /* ================= FILE OPS ================= */
@@ -1730,6 +2532,59 @@ function openImageFile(file) {
   img.onerror = () => toast("Gagal membuka gambar", true);
   img.src = url;
 }
+async function openPSDFile(file) {
+  const t0 = performance.now();
+  try {
+    toast("Membaca PSD…");
+    const buf = await file.arrayBuffer();
+    const doc = parsePSD(buf);
+    App.docW = doc.w; App.docH = doc.h;
+    ensureComposite();
+    const layers = [];
+    const idxToId = new Map();
+    let i = 0;
+    for (const sl of doc.layers) {
+      if (sl.isGroup) {
+        const g = createLayer(sl.name || "Folder", doc.w, doc.h);
+        g.isGroup = true; g.group = null; g.visible = sl.visible !== false;
+        g.expanded = sl.expanded !== false; g.canvas.width = doc.w; g.canvas.height = doc.h;
+        layers.push(g);
+        idxToId.set(i, g.id);
+      } else {
+        const l = createLayer(sl.name || ("Lapisan " + (i + 1)), doc.w, doc.h);
+        l.canvas.getContext("2d").drawImage(sl.canvas, 0, 0);
+        l.visible = sl.visible !== false;
+        l.opacity = sl.opacity == null ? 100 : clamp(sl.opacity, 0, 100);
+        l.blendMode = sl.blendMode || "source-over";
+        if (sl.groupIndex != null && idxToId.has(sl.groupIndex)) l.group = idxToId.get(sl.groupIndex);
+        layers.push(l);
+      }
+      i++;
+    }
+    if (!layers.length) {
+      const l = createLayer("Background", doc.w, doc.h);
+      l.canvas.getContext("2d").drawImage(doc.composite, 0, 0);
+      layers.push(l);
+    }
+    App.layers = layers;
+    App.activeLayerId = layers[layers.length - 1].id;
+    App.selection = null; App.cropRect = null; App.floatSel = null; App.transform = null;
+    App.history = []; App.historyIndex = -1;
+    pushHistory("Buka PSD");
+    fitView(); updateUI();
+    $("#empty-hint").classList.add("hide");
+    toast(`PSD dibuka: ${file.name} — ${doc.w}×${doc.h}, ${layers.length} lapisan (${doc.depth}-bit, ${Math.round(performance.now() - t0)} ms)`);
+  } catch (err) {
+    toast("PSD gagal dibuka: " + (err && err.message ? err.message : err), true);
+  }
+}
+function openAnyFile(file) {
+  if (!file) return;
+  if (/\.psd$/i.test(file.name) || file.type === "image/vnd.adobe.photoshop") return openPSDFile(file);
+  if (/\.json$/i.test(file.name)) return openProjectFile(file);
+  if (file.type.startsWith("image/")) return openImageFile(file);
+  toast("Format file tidak didukung", true);
+}
 function addImageAsLayer(file) {
   const url = URL.createObjectURL(file);
   const img = new Image();
@@ -1761,9 +2616,79 @@ function compositeToCanvas(whiteBg) {
     if (l.isGroup || !isLayerVisible(l)) continue;
     cc.globalAlpha = l.opacity / 100;
     cc.globalCompositeOperation = l.blendMode;
-    cc.drawImage(l.canvas, 0, 0);
+    drawLayerStyled(cc, l);
   }
   return c;
+}
+/* ---- lapisan: mask + gaya (fx) ---- */
+const maskTmp = document.createElement("canvas");
+const maskTmpCtx = maskTmp.getContext("2d");
+function layerSource(l) {
+  if (!l.mask || l.maskOn === false) return l.canvas;
+  if (maskTmp.width !== App.docW || maskTmp.height !== App.docH) {
+    maskTmp.width = App.docW; maskTmp.height = App.docH;
+  }
+  maskTmpCtx.setTransform(1, 0, 0, 1, 0, 0);
+  maskTmpCtx.globalCompositeOperation = "source-over";
+  maskTmpCtx.clearRect(0, 0, App.docW, App.docH);
+  maskTmpCtx.drawImage(l.canvas, 0, 0);
+  maskTmpCtx.globalCompositeOperation = "destination-in";
+  maskTmpCtx.drawImage(l.mask, 0, 0);
+  maskTmpCtx.globalCompositeOperation = "source-over";
+  return maskTmp;
+}
+function drawLayerStyled(ctx, l) {
+  const src = layerSource(l);
+  const st = l.style;
+  if (!st || (!st.shadow?.on && !st.glow?.on && !st.stroke?.on)) {
+    ctx.drawImage(src, 0, 0);
+    return;
+  }
+  if (st.shadow?.on) {
+    ctx.save();
+    ctx.shadowColor = st.shadow.color || "#000";
+    ctx.shadowBlur = st.shadow.blur || 0;
+    ctx.shadowOffsetX = st.shadow.x || 0;
+    ctx.shadowOffsetY = st.shadow.y || 0;
+    ctx.drawImage(src, 0, 0);
+    ctx.restore();
+  }
+  if (st.glow?.on) {
+    ctx.save();
+    ctx.shadowColor = st.glow.color || "#ffd34d";
+    ctx.shadowBlur = st.glow.blur || 0;
+    ctx.shadowOffsetX = 0; ctx.shadowOffsetY = 0;
+    ctx.drawImage(src, 0, 0);
+    ctx.restore();
+  }
+  if (st.stroke?.on && st.stroke.size > 0) {
+    const r = st.stroke.size;
+    const sil = layerOutline(src, st.stroke.color || "#000");
+    ctx.save();
+    for (let a = 0; a < Math.PI * 2; a += Math.PI / 8) {
+      const dx = Math.cos(a) * r, dy = Math.sin(a) * r;
+      ctx.drawImage(sil, dx, dy);
+      if (r > 2) ctx.drawImage(sil, dx * 0.5, dy * 0.5);
+    }
+    ctx.restore();
+  }
+  ctx.drawImage(src, 0, 0);
+}
+const strokeTmp = document.createElement("canvas");
+const strokeTmpCtx = strokeTmp.getContext("2d");
+function layerOutline(src, color) {
+  if (strokeTmp.width !== App.docW || strokeTmp.height !== App.docH) {
+    strokeTmp.width = App.docW; strokeTmp.height = App.docH;
+  }
+  strokeTmpCtx.setTransform(1, 0, 0, 1, 0, 0);
+  strokeTmpCtx.globalCompositeOperation = "source-over";
+  strokeTmpCtx.clearRect(0, 0, App.docW, App.docH);
+  strokeTmpCtx.drawImage(src, 0, 0);
+  strokeTmpCtx.globalCompositeOperation = "source-in";
+  strokeTmpCtx.fillStyle = color;
+  strokeTmpCtx.fillRect(0, 0, App.docW, App.docH);
+  strokeTmpCtx.globalCompositeOperation = "source-over";
+  return strokeTmp;
 }
 function downloadCanvas(c, name, mime) {
   const a = document.createElement("a");
@@ -1904,7 +2829,8 @@ function showModal(title, bodyHTML, buttons) {
 const MENUS = {
   Berkas: [
     { label: "Baru…", sc: "Ctrl+N", fn: newDocDialog },
-    { label: "Buka…", sc: "Ctrl+O", fn: () => $("#file-input").click() },
+    { label: "Buka… (gambar / PSD)", sc: "Ctrl+O", fn: () => $("#file-input").click() },
+    { label: "Buka PSD (Photoshop)…", sc: "Ctrl+Alt+O", fn: () => $("#psd-input").click() },
     { label: "Impor Gambar sebagai Lapisan…", sc: "Ctrl+Shift+O", fn: () => $("#import-input").click() },
     { sep: 1 },
     { label: "Simpan", sc: "Ctrl+S", fn: savePNG },
@@ -1924,9 +2850,9 @@ const MENUS = {
     { label: "Urungkan", sc: "Ctrl+Z", fn: undo },
     { label: "Ulangi", sc: "Ctrl+Y", fn: redo },
     { sep: 1 },
-    { label: "Potong", fn: () => toast("Gunakan tool Marquee/Lasso lalu Hapus/Fill, atau Crop (C)") },
-    { label: "Salin", fn: () => toast("Tidak tersedia di mode web ini") },
-    { label: "Tempel", fn: () => toast("Tidak tersedia di mode web ini") },
+    { label: "Potong", sc: "Ctrl+X", fn: cutSelection },
+    { label: "Salin", sc: "Ctrl+C", fn: () => copySelection(false) },
+    { label: "Tempel", sc: "Ctrl+V", fn: pasteClipboard },
     { sep: 1 },
     { label: "Isi Warna Depan", sc: "Alt+Del", fn: () => fillWith(App.color, false) },
     { label: "Isi Warna Belakang", sc: "Ctrl+Del", fn: () => fillWith(App.secondary, false) },
@@ -1934,6 +2860,14 @@ const MENUS = {
     { sep: 1 },
     { label: "Pilih Semua", sc: "Ctrl+A", fn: selectAll },
     { label: "Batalkan Pilihan", sc: "Ctrl+D", fn: deselect },
+    { label: "Balikkan Seleksi", sc: "Ctrl+Shift+I", fn: invertSelection },
+    { label: "Haluskan Tepi (Feather)…", fn: dialogFeather },
+    { label: "Perluas Seleksi…", fn: () => dialogGrow(false) },
+    { label: "Kontraksi Seleksi…", fn: () => dialogGrow(true) },
+    { sep: 1 },
+    { label: "Transformasi Bebas", sc: "Ctrl+T", fn: startTransform },
+    { label: "Gaya Lapisan (Fx)…", fn: dialogLayerStyle },
+    { label: "Mask dari Seleksi", fn: addMaskFromSelection },
     { sep: 1 },
     { label: "Kunci Lapisan Aktif", fn: () => { const l = activeLayer(); if (l) { l.locked = !l.locked; toast(l.locked ? "Lapisan dikunci" : "Lapisan dibuka"); updateUI(); } else toast("Tidak ada lapisan aktif", true); } },
     { label: "Sembunyikan/Perlihatkan Lapisan Aktif", fn: () => { const l = activeLayer(); if (l) { l.visible = !l.visible; toast(l.visible ? "Lapisan ditampilkan" : "Lapisan disembunyikan"); updateUI(); } else toast("Tidak ada lapisan aktif", true); } },
@@ -1945,6 +2879,7 @@ const MENUS = {
     { label: "Cermin Vertikal", fn: () => rotateFlip("fv") },
     { sep: 1 },
     { label: "Ukuran Gambar…", fn: dialogResize },
+    { label: "Ukuran Kanvas…", fn: dialogCanvasSize },
     { label: "Crop (Alat Pangkas)", fn: () => { setTool("crop"); toast("Pilih alat Pangkas (C) di toolbar"); } },
     { sep: 1 },
     { label: "Ratakan Gambar", fn: flattenImage },
@@ -1964,8 +2899,19 @@ const MENUS = {
     { label: "Sepia", fn: applySepia },
     { label: "Tambah Noise…", fn: dialogNoise },
     { sep: 1 },
+    { label: "Motion Blur…", fn: dialogMotionBlur },
+    { label: "Reduce Noise…", fn: dialogReduceNoise },
+    { label: "Clouds (Awan)", fn: applyClouds },
+    { sep: 1 },
+    { label: "Auto Tone", fn: applyAutoTone },
+    { label: "Auto Kontras", fn: applyAutoContrast },
     { label: "Brightness/Contrast…", fn: dialogBrightnessContrast },
     { label: "Hue/Saturation…", fn: dialogHueSaturation },
+    { label: "Vibrance / Saturasi…", fn: dialogVibrance },
+    { label: "Exposure…", fn: dialogExposure },
+    { label: "Color Balance…", fn: dialogColorBalance },
+    { label: "Threshold…", fn: dialogThreshold },
+    { label: "Posterize…", fn: dialogPosterize },
     { label: "Levels…", fn: dialogLevels },
   ],
   Tampilan: [
@@ -1993,6 +2939,9 @@ const MENUS = {
   Bantuan: [
     { label: "Panduan (Font / Snap / PSD 16-bit)…", fn: helpGuideDialog },
     { label: "Pintasan Keyboard…", fn: shortcutsDialog },
+    { sep: 1 },
+    { label: "Simpan Cadangan (Autosave) Sekarang", fn: () => autosaveTick(false) },
+    { label: "Pulihkan dari Autosave…", fn: checkAutosave },
     { sep: 1 },
     { label: "Reset Aplikasi (Hapus semua lapisan)", fn: () => { if (confirm("Reset dokumen ke awal? Semua lapisan akan diganti.")) newDocument(800, 600, "white"); } },
     { sep: 1 },
@@ -2033,6 +2982,119 @@ function buildMenus() {
     window.addEventListener("resize", () => $$(".menu.open").forEach(positionDropdown));
     window.addEventListener("scroll", () => $$(".menu.open").forEach(positionDropdown), true);
   }
+}
+/* ================= MENU KLIK KANAN ================= */
+let ctxMenuEl = null;
+function hideContextMenu() {
+  if (ctxMenuEl) { ctxMenuEl.remove(); ctxMenuEl = null; }
+}
+function showContextMenu(x, y, items, head) {
+  hideContextMenu();
+  const el = document.createElement("div");
+  el.className = "ctx-menu";
+  if (head) {
+    const h = document.createElement("div");
+    h.className = "ctx-head";
+    h.textContent = head;
+    el.appendChild(h);
+  }
+  items.forEach(it => {
+    if (!it || it.sep) { const s = document.createElement("div"); s.className = "sep"; el.appendChild(s); return; }
+    const row = document.createElement("div");
+    row.className = "item" + (it.disabled ? " disabled" : "");
+    row.innerHTML = `<span>${it.label}</span><span class="sc">${it.sc || ""}</span>`;
+    row.addEventListener("click", ev => {
+      ev.stopPropagation();
+      hideContextMenu();
+      try { it.fn(); } catch (err) { toast("Gagal: " + err.message, true); }
+    });
+    el.appendChild(row);
+  });
+  el.style.left = "-9999px";
+  el.style.top = "0px";
+  document.body.appendChild(el);
+  ctxMenuEl = el;
+  const r = el.getBoundingClientRect();
+  const vw = window.innerWidth, vh = window.innerHeight;
+  el.style.left = Math.max(4, Math.min(x, vw - r.width - 6)) + "px";
+  el.style.top = Math.max(4, Math.min(y, vh - r.height - 6)) + "px";
+}
+function canvasContextMenu(x, y) {
+  const l = activeLayer();
+  const hasSel = !!App.selection;
+  showContextMenu(x, y, [
+    { label: "Urungkan", sc: "Ctrl+Z", fn: undo, disabled: App.historyIndex <= 0 },
+    { label: "Ulangi", sc: "Ctrl+Y", fn: redo, disabled: App.historyIndex >= App.history.length - 1 },
+    { sep: 1 },
+    { label: "Potong", sc: "Ctrl+X", fn: cutSelection },
+    { label: "Salin", sc: "Ctrl+C", fn: () => copySelection(false) },
+    { label: "Tempel", sc: "Ctrl+V", fn: pasteClipboard, disabled: !App.clip },
+    { sep: 1 },
+    { label: "Isi Warna Depan", sc: "Alt+Del", fn: () => fillWith(App.color, false) },
+    { label: "Hapus Isi", sc: "Del", fn: clearAction },
+    { sep: 1 },
+    { label: "Pilih Semua", sc: "Ctrl+A", fn: selectAll },
+    { label: "Batalkan Pilihan", sc: "Ctrl+D", fn: deselect, disabled: !hasSel },
+    { label: "Balikkan Seleksi", sc: "Ctrl+Shift+I", fn: invertSelection },
+    { label: "Haluskan Tepi (Feather)…", fn: dialogFeather, disabled: !hasSel },
+    { label: "Perluas Seleksi…", fn: () => dialogGrow(false), disabled: !hasSel },
+    { label: "Kontraksi Seleksi…", fn: () => dialogGrow(true), disabled: !hasSel },
+    { label: "Tongkat Sihir", sc: "W", fn: () => setTool("wand") },
+    { sep: 1 },
+    { label: "Transformasi Bebas", sc: "Ctrl+T", fn: startTransform, disabled: !l || l.locked || l.isGroup },
+    { label: "Gaya Lapisan (Fx)…", fn: dialogLayerStyle, disabled: !l || l.isGroup },
+    { label: "Mask dari Seleksi", fn: addMaskFromSelection, disabled: !hasSel || !l || l.isGroup },
+    { label: "Aktif/Nonaktif Mask", fn: toggleLayerMask, disabled: !l || !l.mask },
+    { label: "Hapus Mask", fn: deleteLayerMask, disabled: !l || !l.mask },
+    { sep: 1 },
+    { label: "Duplikat Lapisan", fn: duplicateLayer, disabled: !l },
+    { label: "Gabung ke Bawah", sc: "Ctrl+E", fn: mergeDown },
+    { label: "Ratakan Gambar", fn: flattenImage },
+    { label: "Ukuran Kanvas…", fn: dialogCanvasSize },
+    { sep: 1 },
+    { label: "Pas di Layar", sc: "Ctrl+0", fn: fitView },
+    { label: "Zoom 100%", sc: "Ctrl+1", fn: () => zoomAt(1 / App.zoom, viewport.clientWidth / 2, viewport.clientHeight / 2) },
+    { label: (App.showGrid ? "✓ " : "   ") + "Tampilkan Grid", fn: () => { App.showGrid = !App.showGrid; buildMenus(); App.dirty = true; } },
+    { label: (App.snap ? "✓ " : "   ") + "Snap (Tepi & Tengah)", fn: () => { App.snap = !App.snap; buildMenus(); toast("Snap " + (App.snap ? "aktif" : "mati")); } },
+    { sep: 1 },
+    { label: "Ekspor Lengkap…", sc: "Ctrl+Shift+S", fn: dialogExport },
+    { label: "Simpan Proyek…", fn: saveProject },
+    { label: "Simpan Cadangan (Autosave)", fn: () => autosaveTick(false) },
+  ], l ? "Lapisan: " + l.name : "Kanvas");
+}
+function layerContextMenu(x, y, l) {
+  if (l) { App.activeLayerId = l.id; renderLayerList(); syncLayerControls(); updateStatus(); }
+  const al = activeLayer();
+  if (!al) return;
+  showContextMenu(x, y, [
+    { label: "Ganti Nama…", fn: () => layerRenameDialog(al) },
+    { label: "Duplikat Lapisan", fn: duplicateLayer },
+    { label: "Hapus Lapisan", fn: deleteLayer },
+    { sep: 1 },
+    { label: "Naikkan", fn: () => moveLayer(1) },
+    { label: "Turunkan", fn: () => moveLayer(-1) },
+    { label: "Gabung ke Bawah", sc: "Ctrl+E", fn: mergeDown },
+    { sep: 1 },
+    { label: "Gaya Lapisan (Fx)…", fn: dialogLayerStyle, disabled: al.isGroup },
+    { label: "Mask dari Seleksi", fn: addMaskFromSelection, disabled: al.isGroup || !App.selection },
+    { label: (al.maskOn === false ? "   " : "✓ ") + "Mask Aktif", fn: toggleLayerMask, disabled: al.isGroup || !al.mask },
+    { label: "Hapus Mask", fn: deleteLayerMask, disabled: al.isGroup || !al.mask },
+    { label: "Edit Teks…", fn: () => editTextLayerDialog(al), disabled: !al.text },
+    { sep: 1 },
+    { label: (al.visible ? "✓ " : "   ") + "Tampilkan Lapisan", fn: () => { al.visible = !al.visible; pushHistory(al.visible ? "Tampilkan Lapisan" : "Sembunyikan Lapisan"); updateUI(); } },
+    { label: (al.locked ? "✓ " : "   ") + "Kunci Lapisan", fn: () => { al.locked = !al.locked; renderLayerList(); toast(al.locked ? "Lapisan dikunci" : "Lapisan terbuka"); } },
+    { sep: 1 },
+    { label: "Pindah ke Folder…", fn: () => { groupSelected(); }, disabled: al.isGroup },
+    { label: "Lepas dari Folder", fn: ungroupSelected, disabled: !al.group },
+  ], "Lapisan: " + al.name);
+}
+function layerRenameDialog(l) {
+  showModal("Ganti Nama Lapisan", `
+    <div class="field"><label>Nama</label><input type="text" id="rn-name" value="${l.name.replace(/"/g, "&quot;")}"></div>`, [
+    { label: "Batal", onClick: () => {} },
+    { label: "Simpan", primary: true, onClick: () => { l.name = $("#rn-name").value || l.name; renderLayerList(); } },
+  ]);
+  setTimeout(() => { const el = $("#rn-name"); if (el) { el.focus(); el.select(); } }, 40);
 }
 function positionDropdown(m) {
   const title = m.querySelector(".menu-title");
@@ -2262,12 +3324,19 @@ function updateOptionsBar() {
     html += `<button class="opt-btn" id="ob-zin">＋ Perbesar</button>
              <button class="opt-btn" id="ob-zout">－ Perkecil</button>
              <button class="opt-btn" id="ob-fit">Pas di Layar</button>`;
-  } else if (t === "marquee") {
+  } else if (t === "marquee" || t === "wand") {
+    if (t === "wand") {
+      html += slider("wtol", "Toleransi", 0, 100, App.wandTolerance);
+      html += `<label class="chk"><input type="checkbox" id="ob-wcont" ${App.wandContiguous ? "checked" : ""}>Berdekatan</label>`;
+      html += `<label class="chk"><input type="checkbox" id="ob-wall" ${App.wandSampleAll ? "checked" : ""}>Semua Lapisan</label>`;
+    }
     html += `<button class="opt-btn" id="ob-selall">Pilih Semua</button>
              <button class="opt-btn" id="ob-seldel">Batalkan Pilihan</button>`;
+    if (App.selection) html += `<button class="opt-btn" id="ob-selinv">Balikkan Seleksi</button>`;
     if (App.selection) html += `<button class="opt-btn danger" id="ob-selclear">Hapus Isi Seleksi</button>`;
   } else if (t === "move") {
     html += `<label style="color:var(--text2)">Seret lapisan / isi seleksi • ${App.selection ? "ada seleksi" : "tanpa seleksi"}</label>`;
+    if (App.selection) html += `<button class="opt-btn" id="ob-selinv2">Balikkan Seleksi</button>`;
   }
   bar.innerHTML = html;
 
@@ -2282,6 +3351,11 @@ function updateOptionsBar() {
     });
   };
   s("size", "brushSize", "px"); s("op", "toolOpacity", "%"); s("hard", "hardness", "%"); s("tol", "bucketTolerance");
+  s("wtol", "wandTolerance");
+  const wcont = $("#ob-wcont"); if (wcont) wcont.addEventListener("change", () => { App.wandContiguous = wcont.checked; });
+  const wall = $("#ob-wall"); if (wall) wall.addEventListener("change", () => { App.wandSampleAll = wall.checked; });
+  const sinv = $("#ob-selinv"); if (sinv) sinv.addEventListener("click", invertSelection);
+  const sinv2 = $("#ob-selinv2"); if (sinv2) sinv2.addEventListener("click", invertSelection);
   const scEl = $("#ob-scat");
   if (scEl) scEl.addEventListener("input", () => { App.brushPreset.scatter = (+scEl.value) / 100; });
   const ps = $("#ob-preset");
@@ -2591,10 +3665,13 @@ function renderLayerList() {
     const row = document.createElement("div");
     row.className = "layer-row" + (l.id === App.activeLayerId ? " active" : "") + (l.isGroup ? " folder" : "") + (l.group ? " member" : "");
     const chev = l.isGroup ? `<span class="chev" title="Buka/Tutup">${l.expanded === false ? "▸" : "▾"}</span>` : "";
+    const badges = (l.text ? '<span class="badge tbadge" title="Lapisan teks — klik kanan untuk edit">T</span>' : "")
+      + (l.mask ? `<span class="badge mbadge${l.maskOn === false ? " off" : ""}" title="Mask lapisan">M</span>` : "")
+      + (l.style && (l.style.stroke?.on || l.style.shadow?.on || l.style.glow?.on) ? '<span class="badge fbadge" title="Gaya lapisan (Fx)">Fx</span>' : "");
     row.innerHTML = `
       <button class="eye ${l.visible ? "" : "off"}" title="Visibilitas">${l.visible ? "◉" : "○"}</button>
       ${l.isGroup ? '<span class="folder-ico">▤</span>' : '<canvas width="44" height="33"></canvas>'}
-      <div class="lname">${chev}${l.name}</div>
+      <div class="lname">${chev}${l.name}${badges}</div>
       <button class="lock ${l.locked ? "on" : ""}" title="Kunci">${l.locked ? "■" : "□"}</button>`;
     if (!l.isGroup) {
       const c = row.querySelector("canvas");
@@ -2612,6 +3689,10 @@ function renderLayerList() {
     row.addEventListener("click", () => {
       App.activeLayerId = l.id;
       renderLayerList(); syncLayerControls(); updateStatus();
+    });
+    row.addEventListener("contextmenu", e => {
+      e.preventDefault();
+      layerContextMenu(e.clientX, e.clientY, l);
     });
     row.querySelector(".eye").addEventListener("click", e => {
       e.stopPropagation();
@@ -2669,8 +3750,16 @@ function bindLayerUI() {
   $("#layer-del").addEventListener("click", deleteLayer);
   $("#layer-up").addEventListener("click", () => moveLayer(1));
   $("#layer-down").addEventListener("click", () => moveLayer(-1));
-  $("#layer-merge").addEventListener("click", mergeDown);
-  $("#blend-select").addEventListener("change", e => {
+    $("#layer-merge").addEventListener("click", mergeDown);
+    $("#layer-fx").addEventListener("click", dialogLayerStyle);
+    $("#layer-mask").addEventListener("click", () => {
+      const l = activeLayer();
+      if (!l || l.isGroup) return toast("Pilih lapisan biasa dulu", true);
+      if (l.mask) { toggleLayerMask(); return; }
+      addMaskFromSelection();
+    });
+    $("#layer-mask").addEventListener("contextmenu", e => { e.preventDefault(); deleteLayerMask(); });
+    $("#blend-select").addEventListener("change", e => {
     const l = activeLayer(); if (!l) return;
     if (l.isGroup) return toast("Blend mode folder tidak didukung", true);
     l.blendMode = e.target.value;
@@ -2732,7 +3821,11 @@ document.addEventListener("keydown", e => {
     if (k === "n") { e.preventDefault(); newDocDialog(); return; }
     if (k === "a") { e.preventDefault(); selectAll(); return; }
     if (k === "d") { e.preventDefault(); deselect(); return; }
-    if (k === "i") { e.preventDefault(); applyInvert(); return; }
+    if (k === "i") { e.preventDefault(); e.shiftKey ? invertSelection() : applyInvert(); return; }
+    if (k === "x") { e.preventDefault(); cutSelection(); return; }
+    if (k === "c") { e.preventDefault(); copySelection(false); return; }
+    if (k === "v") { e.preventDefault(); pasteClipboard(); return; }
+    if (e.altKey && k === "o") { e.preventDefault(); $("#psd-input").click(); return; }
     if (k === "e") { e.preventDefault(); mergeDown(); return; }
     if (e.key === "Backspace" || e.key === "Delete") { e.preventDefault(); fillWith(App.secondary, false); return; }
     if (k === "t") { e.preventDefault(); startTransform(); return; }
@@ -2747,11 +3840,7 @@ document.addEventListener("keydown", e => {
   if (e.key === "Escape") {
     if (App.transform) { cancelTransform(); return; }
     if (App.cropRect) { App.cropRect = null; updateOptionsBar(); App.dirty = true; }
-    if (App.floatSel) {
-      const l = activeLayer();
-      if (l) { l.ctx.drawImage(App.floatSel.canvas, App.floatSel.x, App.floatSel.y); updateLayerThumbs(); }
-      App.floatSel = null;
-    }
+    if (App.floatSel) { commitFloating(); App.floatSel = null; return; }
     hideTextInput();
     return;
   }
@@ -2763,6 +3852,7 @@ document.addEventListener("keydown", e => {
   }
   if (e.key === "Enter") {
     if (App.transform) { commitTransform(); return; }
+    if (App.floatSel) { commitFloating(); return; }
     if (App.cropRect) { applyCrop(); return; }
   }
 
@@ -2800,7 +3890,7 @@ function init() {
 
   $("#file-input").addEventListener("change", e => {
     const f = e.target.files[0];
-    if (f) openImageFile(f);
+    if (f) openAnyFile(f);
     e.target.value = "";
   });
   $("#proj-input").addEventListener("change", e => {
@@ -2815,6 +3905,11 @@ function init() {
   $("#import-input").addEventListener("change", e => {
     const f = e.target.files[0];
     if (f) addImageAsLayer(f);
+    e.target.value = "";
+  });
+  $("#psd-input").addEventListener("change", e => {
+    const f = e.target.files[0];
+    if (f) openPSDFile(f);
     e.target.value = "";
   });
 
@@ -2834,6 +3929,12 @@ function init() {
 
   if ("serviceWorker" in navigator && location.protocol.startsWith("http")) {
     navigator.serviceWorker.register("sw.js").catch(() => {});
+  }
+
+  startAutosave();
+  if (!sessionStorage.getItem("pslite.askrestore")) {
+    sessionStorage.setItem("pslite.askrestore", "1");
+    setTimeout(() => { try { checkAutosave(); } catch (e) {} }, 700);
   }
 
   loop();

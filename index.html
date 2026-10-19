@@ -115,6 +115,8 @@
             <button id="layer-group" title="Masukkan lapisan ke folder">⊞</button>
             <button id="layer-ungroup" title="Lepas dari folder">⊟</button>
             <button id="layer-dup" title="Duplikat lapisan">⧉</button>
+            <button id="layer-fx" title="Gaya lapisan (tepi / bayangan / glow)">Fx</button>
+            <button id="layer-mask" title="Mask dari seleksi (non-destruktif)">M</button>
             <button id="layer-merge" title="Gabung ke bawah (Ctrl+E)">⤵</button>
             <button id="layer-up" title="Naikkan">▲</button>
             <button id="layer-down" title="Turunkan">▼</button>
@@ -143,10 +145,11 @@
 
 <div id="modal-root"></div>
 <div id="toast"></div>
-      <input type="file" id="file-input" accept="image/*" hidden>
+      <input type="file" id="file-input" accept="image/*,.psd,image/vnd.adobe.photoshop" hidden>
       <input type="file" id="proj-input" accept=".json,application/json" hidden>
       <input type="file" id="font-input" accept=".ttf,.otf,.woff,.woff2,font/*" multiple hidden>
       <input type="file" id="import-input" accept="image/*" hidden>
+      <input type="file" id="psd-input" accept=".psd,image/vnd.adobe.photoshop" hidden>
 <script src="brushes.js"></script>
 <script src="psd.js"></script>
 <script src="app.js"></script>

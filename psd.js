@@ -200,3 +200,297 @@ function exportPSD(depth, scale) {
   setTimeout(() => URL.revokeObjectURL(a.href), 5000);
   toast("PSD " + depth + "-bit " + w + "×" + h + " diekspor (" + (bytes.length / 1048576).toFixed(2) + " MB) — lapisan + folder ikut");
 }
+
+/* ================= PEMBACA PSD (impor) ================= */
+const PSD_BLEND_NAMES = (() => {
+  const m = { norm: "source-over" };
+  for (const [k, v] of Object.entries(PSD_BLEND_KEYS)) m[v] = k;
+  return m;
+})();
+
+function psdReader(buf) {
+  if (!(buf instanceof Uint8Array)) buf = new Uint8Array(buf);
+  const dv = new DataView(buf.buffer, buf.byteOffset, buf.byteLength);
+  return {
+    dv, buf, _p: 0,
+    get pos() { return this._p || 0; },
+    set pos(v) { this._p = v; },
+    u8() { const v = dv.getUint8(this._p); this._p += 1; return v; },
+    u16() { const v = dv.getUint16(this._p); this._p += 2; return v; },
+    i16() { const v = dv.getInt16(this._p); this._p += 2; return v; },
+    u32() { const v = dv.getUint32(this._p); this._p += 4; return v; },
+    i32() { const v = dv.getInt32(this._p); this._p += 4; return v; },
+    str(n) {
+      let s = "";
+      for (let i = 0; i < n; i++) s += String.fromCharCode(dv.getUint8(this._p + i));
+      this._p += n;
+      return s;
+    },
+    skip(n) { this._p += n; },
+  };
+}
+function psdUnpackRow(src, n, rowLen) {
+  const out = new Uint8Array(rowLen);
+  let i = 0, o = 0;
+  while (i < n && o < rowLen) {
+    const h = src[i++];
+    if (h < 128) {
+      const c = h + 1;
+      for (let k = 0; k < c && o < rowLen && i < n; k++) out[o++] = src[i++];
+    } else if (h > 128) {
+      const c = 257 - h, v = i < n ? src[i++] : 0;
+      for (let k = 0; k < c && o < rowLen; k++) out[o++] = v;
+    }
+  }
+  return out;
+}
+function psdParseChannel(r, comp, len, cw, ch, depth, target, channelCount) {
+  /* target = array of Uint8Array planes */
+  const bpp = depth / 8;
+  const rowLen = cw * bpp;
+  const end = r.pos + Math.max(0, len - 2);
+  if (comp === 0) {
+    for (let y = 0; y < ch; y++) {
+      const row = new Uint8Array(rowLen);
+      for (let i = 0; i < rowLen; i++) row[i] = r.dv.getUint8(r.pos + y * rowLen + i);
+      for (let x = 0; x < cw; x++) target[y * cw + x] = row[x * bpp];
+    }
+  } else if (comp === 1) {
+    const counts = [];
+    let total = 0;
+    for (let y = 0; y < ch; y++) { const c = r.u16(); counts.push(c); total += c; }
+    let q = r.pos;
+    for (let y = 0; y < ch; y++) {
+      const row = psdUnpackRow(r.buf.subarray(q, q + counts[y]), counts[y], rowLen);
+      for (let x = 0; x < cw; x++) target[y * cw + x] = row[x * bpp];
+      q += counts[y];
+    }
+  }
+  r.pos = end;
+  return target;
+}
+function psdCanvasFromPlanes(planes, w, h, left, top) {
+  const c = document.createElement("canvas");
+  c.width = Math.max(1, w); c.height = Math.max(1, h);
+  const ctx = c.getContext("2d", { willReadFrequently: true });
+  const img = ctx.createImageData(Math.max(1, w), Math.max(1, h));
+  const R = planes[0], G = planes[1] || planes[0], B = planes[2] || planes[0], A = planes[3];
+  for (let i = 0; i < w * h; i++) {
+    img.data[i * 4] = R ? R[i] : 0;
+    img.data[i * 4 + 1] = G ? G[i] : 0;
+    img.data[i * 4 + 2] = B ? B[i] : 0;
+    img.data[i * 4 + 3] = A ? A[i] : 255;
+  }
+  ctx.putImageData(img, 0, 0);
+  return c;
+}
+function psdLayerCanvas(rec, docW, docH, chanData) {
+  const lw = Math.max(1, rec.right - rec.left), lh = Math.max(1, rec.bottom - rec.top);
+  const planes = [null, null, null, null];
+  for (const ch of chanData) {
+    if (ch.id >= 0 && ch.id <= 2) planes[ch.id] = ch.plane;
+    else if (ch.id === -1) planes[3] = ch.plane;
+  }
+  if (!planes[0] && !planes[1] && !planes[2]) return null;
+  const lc = document.createElement("canvas");
+  lc.width = lw; lc.height = lh;
+  const ctx = lc.getContext("2d", { willReadFrequently: true });
+  const img = ctx.createImageData(lw, lh);
+  const R = planes[0], G = planes[1], B = planes[2], A = planes[3];
+  for (let i = 0; i < lw * lh; i++) {
+    img.data[i * 4] = R ? R[i] : 0;
+    img.data[i * 4 + 1] = G ? G[i] : (R ? R[i] : 0);
+    img.data[i * 4 + 2] = B ? B[i] : (R ? R[i] : 0);
+    img.data[i * 4 + 3] = A ? A[i] : 255;
+  }
+  ctx.putImageData(img, 0, 0);
+  const full = document.createElement("canvas");
+  full.width = docW; full.height = docH;
+  full.getContext("2d").drawImage(lc, rec.left, rec.top);
+  return full;
+}
+function parsePSD(arrayBuffer) {
+  const r = psdReader(arrayBuffer);
+  if (r.str(4) !== "8BPS") throw new Error("bukan file PSD");
+  const version = r.u16();
+  if (version !== 1) throw new Error("versi PSD tidak didukung");
+  r.skip(6);
+  const channels = r.u16();
+  const h = r.u32(), w = r.u32();
+  const depth = r.u16();
+  const mode = r.u16();
+  if (!w || !h) throw new Error("dimensi tidak valid");
+  if (w * h > 60000000) throw new Error("dokumen terlalu besar (maks 60 MP)");
+  if (![8, 16].includes(depth)) throw new Error("kedalaman " + depth + "-bit belum didukung");
+  if (mode !== 3 && mode !== 1) throw new Error("hanya RGB / Grayscale");
+  const gray = mode === 1;
+
+  r.skip(r.u32());
+  r.skip(r.u32());
+
+  const lmLen = r.u32();
+  const lmStart = r.pos;
+  const layers = [];
+  let parsedLayers = [];
+  try {
+    if (lmLen > 8) {
+      const lmEnd = lmStart + lmLen;
+      const layerInfoLen = r.u32();
+      const liEnd = r.pos + layerInfoLen;
+      let count = r.i16();
+      count = Math.abs(count);
+      const recs = [];
+      for (let i = 0; i < count; i++) {
+        const rec = {
+          top: r.i32(), left: r.i32(), bottom: r.i32(), right: r.i32(),
+          channels: [], name: "Lapisan " + (i + 1), opacity: 255, visible: true,
+          blend: "source-over", isGroup: false, skipLayer: false,
+        };
+        const nc = r.u16();
+        for (let c = 0; c < nc; c++) rec.channels.push({ id: r.i16(), len: r.u32() });
+        r.str(4);
+        const key = r.str(4);
+        rec.blend = PSD_BLEND_NAMES[key] || "source-over";
+        rec.opacity = r.u8();
+        r.u8();
+        const flags = r.u8();
+        rec.visible = !(flags & 2);
+        r.u8();
+        const extraLen = r.u32();
+        const extraEnd = r.pos + extraLen;
+        const maskLen = r.u32(); r.skip(maskLen);
+        const rangeLen = r.u32(); r.skip(rangeLen);
+        const nameLen = r.u8();
+        let nm = r.str(nameLen);
+        const pad = (4 - ((nameLen + 1) % 4)) % 4;
+        r.skip(pad);
+        while (r.pos + 12 <= extraEnd) {
+          const sig = r.str(4);
+          if (sig !== "8BIM" && sig !== "8B64") break;
+          const k = r.str(4);
+          const kl = r.u32();
+          const kend = r.pos + kl;
+          if (k === "lsct" && kl >= 4) {
+            const t = r.u32();
+            if (t === 1 || t === 2) { rec.isGroup = true; rec.expanded = t === 1; }
+            else if (t === 3) rec.skipLayer = true;
+          } else if (k === "luni" && kl > 4) {
+            const n = r.u32();
+            let s = "";
+            for (let j = 0; j < n; j++) s += String.fromCharCode(r.u16());
+            if (s.trim()) nm = s;
+          }
+          r.pos = kend;
+          if (r.pos > extraEnd) break;
+        }
+        r.pos = extraEnd;
+        rec.name = nm || rec.name;
+        recs.push(rec);
+      }
+      /* data kanal per lapisan */
+      for (const rec of recs) {
+        const cw = Math.max(0, rec.right - rec.left), ch = Math.max(0, rec.bottom - rec.top);
+        const chanData = [];
+        for (const chn of rec.channels) {
+          const comp = r.u16();
+          const planes = new Uint8Array(Math.max(0, cw * ch));
+          if (cw && ch) psdParseChannel(r, comp, chn.len, cw, ch, depth, planes);
+          else r.pos += Math.max(0, chn.len - 2);
+          chanData.push({ id: chn.id, plane: planes });
+        }
+        rec.chanData = chanData;
+      }
+      r.pos = liEnd;
+      /* bangun kanvas */
+      const activeGroup = [];
+      for (const rec of recs) {
+        if (rec.skipLayer) { activeGroup.pop(); continue; }
+        if (rec.isGroup) {
+          const g = { id: null, name: rec.name, isGroup: true, expanded: rec.expanded !== false, visible: rec.visible, opacity: Math.round(rec.opacity / 2.55), blendMode: "source-over", group: activeGroup.length ? activeGroup[activeGroup.length - 1] : null, canvas: null };
+          parsedLayers.push(g);
+          activeGroup.push(parsedLayers.length - 1);
+          continue;
+        }
+        const cv = psdLayerCanvas(rec, w, h, rec.chanData);
+        if (!cv) continue;
+        parsedLayers.push({
+          name: rec.name, canvas: cv, visible: rec.visible,
+          opacity: Math.round(rec.opacity / 2.55), blendMode: rec.blend,
+          isGroup: false, expanded: true,
+          groupIndex: activeGroup.length ? activeGroup[activeGroup.length - 1] : null,
+        });
+      }
+      r.pos = lmEnd;
+    }
+  } catch (e) {
+    parsedLayers = [];
+    r.pos = lmStart + lmLen;
+  }
+  r.pos = lmStart + lmLen;
+
+  /* gambar komposit */
+  const comp = r.u16();
+  const compPlanes = [];
+  const nCh = Math.max(1, gray ? 1 : 3);
+  const rowLen = w * depth / 8;
+  if (comp === 0) {
+    for (let c = 0; c < nCh; c++) {
+      const plane = new Uint8Array(w * h);
+      for (let y = 0; y < h; y++) for (let x = 0; x < w; x++) plane[y * w + x] = r.dv.getUint8(r.pos + y * rowLen + x * depth / 8);
+      r.pos += rowLen * h;
+      compPlanes.push(plane);
+    }
+  } else if (comp === 1) {
+    const p0 = r.pos;
+    const readLayout = (perChannel) => {
+      const planes = [];
+      let q = p0, ok = true;
+      const allCounts = [];
+      if (!perChannel) {
+        for (let i = 0; i < nCh * h; i++) allCounts.push(r.dv.getUint16(q + i * 2));
+        q += nCh * h * 2;
+        for (let c = 0; c < nCh; c++) {
+          const plane = new Uint8Array(w * h);
+          for (let y = 0; y < h; y++) {
+            const cnt = allCounts[c * h + y];
+            const row = psdUnpackRow(r.buf.subarray(q, q + cnt), cnt, rowLen);
+            for (let x = 0; x < w; x++) plane[y * w + x] = row[x * depth / 8];
+            q += cnt;
+          }
+          planes.push(plane);
+        }
+      } else {
+        for (let c = 0; c < nCh; c++) {
+          const counts = [];
+          for (let y = 0; y < h; y++) counts.push(r.dv.getUint16(q + y * 2));
+          q += h * 2;
+          const plane = new Uint8Array(w * h);
+          for (let y = 0; y < h; y++) {
+            const cnt = counts[y];
+            const row = psdUnpackRow(r.buf.subarray(q, q + cnt), cnt, rowLen);
+            for (let x = 0; x < w; x++) plane[y * w + x] = row[x * depth / 8];
+            q += cnt;
+          }
+          planes.push(plane);
+        }
+      }
+      if (q > r.buf.byteLength) ok = false;
+      return { planes, ok, end: q };
+    };
+    let res = readLayout(true);
+    if (!res.ok || res.end !== r.buf.byteLength) {
+      const spec = readLayout(false);
+      if (spec.ok) res = spec;
+    }
+    res.planes.forEach(p => compPlanes.push(p));
+  } else {
+    throw new Error("kompresi gambar " + comp + " tidak didukung");
+  }
+  const composite = psdCanvasFromPlanes(compPlanes, w, h);
+
+  if (!parsedLayers.length) {
+    parsedLayers.push({ name: "Background", canvas: composite, visible: true, opacity: 100, blendMode: "source-over", isGroup: false, expanded: true, groupIndex: null });
+  }
+  for (const l of parsedLayers) if (l.isGroup) l.canvas = document.createElement("canvas");
+  return { w, h, depth, layers: parsedLayers, composite };
+}

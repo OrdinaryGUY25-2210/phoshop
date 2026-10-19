@@ -775,3 +775,99 @@ body.tab-mode #optionsbar,
 body.tab-mode #toolbar,
 body.tab-mode #panels { display: none !important; }
 body.tab-mode #panel-toggle { display: none; }
+
+/* ================= MENU KLIK KANAN ================= */
+.ctx-menu {
+  position: fixed;
+  top: 0;
+  left: 0;
+  background: var(--panel3);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  min-width: 218px;
+  max-width: 300px;
+  max-height: 86vh;
+  overflow-y: auto;
+  padding: 5px;
+  z-index: 1200;
+  box-shadow: 0 10px 28px rgba(0,0,0,.6);
+  font-size: 12.5px;
+  color: var(--text);
+  user-select: none;
+}
+.ctx-menu .ctx-head {
+  padding: 6px 10px 7px;
+  margin: -1px -1px 4px;
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: .02em;
+  color: var(--text2);
+  border-bottom: 1px solid var(--border);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.ctx-menu .item {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 20px;
+  padding: 6px 10px;
+  border-radius: 4px;
+  cursor: pointer;
+  white-space: nowrap;
+}
+.ctx-menu .item:hover { background: var(--accent); color: #fff; }
+.ctx-menu .item .sc { color: var(--text2); font-size: 11px; }
+.ctx-menu .item:hover .sc { color: #dbeafd; }
+.ctx-menu .sep { height: 1px; background: var(--border2); margin: 5px 6px; }
+.ctx-menu .item.disabled { opacity: .4; pointer-events: none; }
+
+/* ================= JANGKAR UKURAN KANVAS ================= */
+.anchor-grid {
+  display: grid;
+  grid-template-columns: repeat(3, 26px);
+  grid-template-rows: repeat(3, 26px);
+  gap: 3px;
+  margin: 6px 0 2px;
+}
+.anchor-grid button {
+  background: var(--panel);
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  cursor: pointer;
+  padding: 0;
+  position: relative;
+}
+.anchor-grid button:hover { background: var(--hover); }
+.anchor-grid button.on { background: var(--accent); border-color: var(--accent); }
+.anchor-grid button.on::after {
+  content: "";
+  position: absolute;
+  inset: 8px;
+  border-radius: 2px;
+  background: #fff;
+}
+
+/* ================= BADGE LAPISAN ================= */
+.layer-row .badge {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 15px;
+  height: 15px;
+  margin-left: 4px;
+  padding: 0 3px;
+  border-radius: 3px;
+  font-size: 9.5px;
+  font-weight: 700;
+  line-height: 1;
+  cursor: default;
+  background: rgba(255,255,255,.12);
+  color: #cfd8e6;
+  flex: none;
+}
+.layer-row .badge.tbadge { background: rgba(58,142,230,.28); color: #bfe0ff; }
+.layer-row .badge.mbadge { background: rgba(120,200,120,.26); color: #c8f0c8; }
+.layer-row .badge.mbadge.off { opacity: .4; }
+.layer-row .badge.fbadge { background: rgba(230,197,72,.24); color: #ffe9a8; }
