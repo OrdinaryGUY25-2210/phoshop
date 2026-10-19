@@ -1,0 +1,14 @@
+{
+  "name": "PS Lite — Editor Foto",
+  "short_name": "PS Lite",
+  "description": "Editor foto gaya Photoshop untuk desktop & mobile",
+  "start_url": ".",
+  "scope": ".",
+  "display": "standalone",
+  "orientation": "any",
+  "background_color": "#1e1e1e",
+  "theme_color": "#1e1e1e",
+  "icons": [
+    { "src": "icons/icon.svg", "sizes": "any", "type": "image/svg+xml", "purpose": "any maskable" }
+  ]
+}

@@ -1,0 +1,10 @@
+{
+  "appId": "com.pslite.editor",
+  "appName": "PS Lite",
+  "webDir": ".",
+  "backgroundColor": "#1e1e1e",
+  "android": {
+    "allowMixedContent": false
+  },
+  "plugins": {}
+}
