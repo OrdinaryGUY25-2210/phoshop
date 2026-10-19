@@ -329,7 +329,7 @@ function jumpTo(i) {
     isGroup: !!sl.isGroup, group: sl.group || null, expanded: sl.expanded !== false,
     canvas: sl.canvas, ctx: makeCtx(sl.canvas),
   }));
-  App.activeLayerId = s.activeLayerId;
+  App.activeLayerId = (App.layers.some(x => x.id === s.activeLayerId) ? s.activeLayerId : (App.layers[0] && App.layers[0].id));
   App.selection = null; App.cropRect = null; App.floatSel = null;
   updateUI();
 }
@@ -1730,6 +1730,28 @@ function openImageFile(file) {
   img.onerror = () => toast("Gagal membuka gambar", true);
   img.src = url;
 }
+function addImageAsLayer(file) {
+  const url = URL.createObjectURL(file);
+  const img = new Image();
+  img.onload = () => {
+    URL.revokeObjectURL(url);
+    let w = img.naturalWidth, h = img.naturalHeight;
+    const scale = Math.min(1, App.docW / w, App.docH / h);
+    w = Math.max(1, Math.round(w * scale));
+    h = Math.max(1, Math.round(h * scale));
+    const l = addLayer(file.name.replace(/\.[^.]+$/, "") || "Gambar");
+    const dx = Math.round((App.docW - w) / 2);
+    const dy = Math.round((App.docH - h) / 2);
+    l.ctx.drawImage(img, dx, dy, w, h);
+    pushHistory("Impor Gambar");
+    updateLayerThumbs();
+    $("#empty-hint") && $("#empty-hint").classList.add("hide");
+    fitView();
+    toast(`Gambar ditambahkan sebagai lapisan: ${file.name} (${img.naturalWidth}×${img.naturalHeight})`);
+  };
+  img.onerror = () => { URL.revokeObjectURL(url); toast("Gagal mengimpor gambar", true); };
+  img.src = url;
+}
 function compositeToCanvas(whiteBg) {
   const c = document.createElement("canvas");
   c.width = App.docW; c.height = App.docH;
@@ -1883,6 +1905,7 @@ const MENUS = {
   Berkas: [
     { label: "Baru…", sc: "Ctrl+N", fn: newDocDialog },
     { label: "Buka…", sc: "Ctrl+O", fn: () => $("#file-input").click() },
+    { label: "Impor Gambar sebagai Lapisan…", sc: "Ctrl+Shift+O", fn: () => $("#import-input").click() },
     { sep: 1 },
     { label: "Simpan sebagai PNG", sc: "Ctrl+S", fn: savePNG },
     { label: "Simpan sebagai JPEG", fn: saveJPEG },
@@ -1976,13 +1999,34 @@ function buildMenus() {
       e.stopPropagation();
       const was = m.classList.contains("open");
       $$(".menu").forEach(x => x.classList.remove("open"));
-      if (!was) m.classList.add("open");
+      if (!was) {
+        m.classList.add("open");
+        positionDropdown(m);
+      }
     });
     box.appendChild(m);
   });
   if (!buildMenus._bound) {
     buildMenus._bound = true;
     document.addEventListener("click", () => $$(".menu").forEach(x => x.classList.remove("open")));
+    window.addEventListener("resize", () => $$(".menu.open").forEach(positionDropdown));
+    window.addEventListener("scroll", () => $$(".menu.open").forEach(positionDropdown), true);
+  }
+}
+function positionDropdown(m) {
+  const title = m.querySelector(".menu-title");
+  const dd = m.querySelector(".dropdown");
+  if (!title || !dd) return;
+  const r = title.getBoundingClientRect();
+  dd.style.top = Math.round(r.bottom + 2) + "px";
+  dd.style.left = Math.round(r.left) + "px";
+  dd.style.minWidth = Math.max(230, Math.round(r.width)) + "px";
+  const dr = dd.getBoundingClientRect();
+  const vw = window.innerWidth, vh = window.innerHeight;
+  if (dr.right > vw - 4) dd.style.left = Math.max(4, Math.round(vw - dr.width - 4)) + "px";
+  if (dr.bottom > vh - 4) {
+    const maxH = Math.max(120, Math.round(vh - r.bottom - 12));
+    dd.style.maxHeight = maxH + "px";
   }
 }
 function toggleTabMode() {
@@ -2009,20 +2053,20 @@ function shortcutsDialog() {
     ["Kuas", "B"], ["Penghapus", "E"], ["Pindah", "V"], ["Kotak Pilih", "M"],
     ["Pangkas", "C"], ["Ember Cat", "G"], ["Penetes", "I"], ["Teks", "T"],
     ["Bentuk", "U"], ["Zoom", "Z"], ["Tangan / Spasi", "H / Space"],
-    ["Urungkan / Ulangi", "Ctrl+Z / Ctrl+Y"], ["Simpan PNG", "Ctrl+S"],
+    ["Urungkan / Ulangi", "Ctrl+Z / Ctrl+Y"], ["Simpan PNG", "Ctrl+S"], ["Ekspor Lengkap", "Ctrl+Shift+S"],
     ["Pilih Semua / Batalkan", "Ctrl+A / Ctrl+D"], ["Isi warna depan", "Alt+Del"],
     ["Hapus isi", "Del"], ["Ukuran kuas", "[ dan ]"], ["Tukar warna", "X"],
     ["Reset warna", "D"], ["Gabung ke bawah", "Ctrl+E"], ["Pas di layar", "Ctrl+0"],
     ["Zoom 100%", "Ctrl+1"], ["Batal (crop/teks)", "Esc"],
     ["Mode fokus (sembunyikan panel)", "Tab"], ["Snap tepi/tengah (on/off)", "Tampilan → Snap"],
     ["Grup / Ungroup lapisan", "⊞ / ⊟"], ["Tambah font", "＋ Font… (options bar Teks)"],
-    ["Ekspor lengkap (semua format)", "Ctrl+Shift+S"], ["Rasio pangkas", "options bar Pangkas"],
+    ["Buka", "Ctrl+O"], ["Impor sebagai Lapisan", "Ctrl+Shift+O"], ["Buat baru", "Ctrl+N"], ["Rasio pangkas", "options bar Pangkas"],
   ];
   showModal("Pintasan Keyboard", `
     <table class="shortcut-table">
       <tr><th>Aksi</th><th>Tombol</th></tr>
       ${rows.map(r => `<tr><td>${r[0]}</td><td>${r[1]}</td></tr>`).join("")}
-    </table>`);
+    </table>`, [{ label: "Tutup", primary: true }]);
 }
 function aboutDialog() {
   showModal("Tentang PS Lite", `
@@ -2663,7 +2707,7 @@ document.addEventListener("keydown", e => {
     if (k === "z") { e.preventDefault(); e.shiftKey ? redo() : undo(); return; }
     if (k === "y") { e.preventDefault(); redo(); return; }
     if (k === "s") { e.preventDefault(); e.shiftKey ? dialogExport() : savePNG(); return; }
-    if (k === "o") { e.preventDefault(); $("#file-input").click(); return; }
+    if (k === "o") { e.preventDefault(); e.shiftKey ? $("#import-input").click() : $("#file-input").click(); return; }
     if (k === "n") { e.preventDefault(); newDocDialog(); return; }
     if (k === "a") { e.preventDefault(); selectAll(); return; }
     if (k === "d") { e.preventDefault(); deselect(); return; }
@@ -2745,6 +2789,11 @@ function init() {
   });
   $("#font-input").addEventListener("change", e => {
     if (e.target.files.length) addFontFiles([...e.target.files]);
+    e.target.value = "";
+  });
+  $("#import-input").addEventListener("change", e => {
+    const f = e.target.files[0];
+    if (f) addImageAsLayer(f);
     e.target.value = "";
   });
 

@@ -74,17 +74,21 @@ html, body {
 }
 .menu-title:hover, .menu.open .menu-title { background: var(--hover); color: var(--text); }
 
+/* Dropdown diposisikan fixed oleh JS agar tidak terpotong oleh overflow #menus
+   dan selalu berada di atas options bar / toolbar. */
 .dropdown {
   display: none;
-  position: absolute;
-  top: 100%;
+  position: fixed;
+  top: 0;
   left: 0;
   background: var(--panel3);
   border: 1px solid var(--border);
   border-radius: var(--radius);
   min-width: 230px;
+  max-height: 70vh;
+  overflow-y: auto;
   padding: 5px;
-  z-index: 200;
+  z-index: 900;
   box-shadow: 0 8px 24px rgba(0,0,0,.55);
 }
 .menu.open .dropdown { display: block; }
