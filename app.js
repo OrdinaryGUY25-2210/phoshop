@@ -14,6 +14,8 @@ const App = {
   color: "#000000", secondary: "#ffffff",
   brushSize: 24, hardness: 100, toolOpacity: 100,
   brushPreset: BRUSH_PRESETS[0],
+  customFonts: [],
+  snap: true,
   bucketTolerance: 32,
   shapeType: "rect", shapeMode: "fill",
   gradMode: "fgt",
@@ -64,6 +66,7 @@ const TOOLS = {
     svg: '<path d="M8 13V6a1.5 1.5 0 013 0v5M11 11V5a1.5 1.5 0 013 0v6M14 11V7a1.5 1.5 0 013 0v7c0 4-2 7-6 7s-6-2-6-6v-2a1.5 1.5 0 013 0"/>' },
 };
 
+const BASE_FONTS = ["Arial", "Georgia", "Times New Roman", "Courier New", "Impact", "Verdana", "Trebuchet MS", "Comic Sans MS", "Segoe UI"];
 const PALETTE = [
   "#000000","#434343","#666666","#999999","#b7b7b7","#cccccc","#d9d9d9","#ffffff",
   "#ff0000","#ff9900","#ffff00","#00ff00","#00ffff","#0000ff","#9900ff","#ff00ff",
@@ -103,6 +106,45 @@ function toast(msg, err) {
 }
 function normalizeRect(x0, y0, x1, y1) {
   return { x: Math.min(x0, x1), y: Math.min(y0, y1), w: Math.abs(x1 - x0), h: Math.abs(y1 - y0) };
+}
+
+/* ================= SNAP ================= */
+function snapTargets(axis) {
+  const size = axis === "x" ? App.docW : App.docH;
+  const t = [0, size / 2, size];
+  if (App.showGrid) for (let v = 50; v < size; v += 50) t.push(v);
+  return t;
+}
+function snapVal(v, axis) {
+  if (!App.snap) return v;
+  const tol = 6 / App.zoom;
+  let best = v, bd = tol;
+  for (const t of snapTargets(axis)) {
+    const d = Math.abs(v - t);
+    if (d < bd) { bd = d; best = t; }
+  }
+  return best;
+}
+function snapRect(r) {
+  if (!App.snap) return r;
+  const x0 = snapVal(r.x, "x"), x1 = snapVal(r.x + r.w, "x");
+  const y0 = snapVal(r.y, "y"), y1 = snapVal(r.y + r.h, "y");
+  return { x: x0, y: y0, w: Math.max(1, x1 - x0), h: Math.max(1, y1 - y0) };
+}
+function snapMove(bbox, dx, dy) {
+  if (!App.snap || !bbox) return [dx, dy];
+  const tol = 6 / App.zoom;
+  const corr = (targets, positions) => {
+    let best = 0, bd = tol;
+    for (const t of targets) for (const p of positions) {
+      const c = t - p;
+      if (Math.abs(c) < bd) { bd = Math.abs(c); best = c; }
+    }
+    return best;
+  };
+  const cx = corr(snapTargets("x"), [bbox.x + dx, bbox.x + bbox.w + dx, bbox.x + bbox.w / 2 + dx]);
+  const cy = corr(snapTargets("y"), [bbox.y + dy, bbox.y + bbox.h + dy, bbox.y + bbox.h / 2 + dy]);
+  return [dx + cx, dy + cy];
 }
 
 /* ================= LAYERS ================= */
@@ -812,7 +854,7 @@ function toolDown(e, p) {
           App.drag = { type: "float", dx: d.x - bx, dy: d.y - by };
         } else App.drag = null;
       } else {
-        App.drag = { type: "layer", snap: cloneCanvas(layer.canvas), sx: d.x, sy: d.y };
+        App.drag = { type: "layer", snap: cloneCanvas(layer.canvas), sx: d.x, sy: d.y, bbox: contentBBox(layer) };
       }
       App.dirty = true;
       break;
@@ -864,32 +906,39 @@ function toolMove(e, p) {
   switch (App.drag.type) {
     case "marquee": {
       const o = App.marqueeDraft;
-      App.marqueeDraft = { x: Math.min(o.x0, d.x), y: Math.min(o.y0, d.y), w: Math.abs(d.x - o.x0), h: Math.abs(d.y - o.y0), x0: o.x0, y0: o.y0 };
+      const r0 = normalizeRect(o.x0, o.y0, d.x, d.y);
+      const r = snapRect(r0);
+      App.marqueeDraft = { x: r.x, y: r.y, w: r.w, h: r.h, x0: o.x0, y0: o.y0 };
       App.dirty = true;
       break;
     }
     case "crop": {
       const o = App.cropRect;
-      App.cropRect = { x: Math.min(o.x0, d.x), y: Math.min(o.y0, d.y), w: Math.abs(d.x - o.x0), h: Math.abs(d.y - o.y0), x0: o.x0, y0: o.y0 };
+      const r0 = normalizeRect(o.x0, o.y0, d.x, d.y);
+      const r = snapRect(r0);
+      App.cropRect = { x: r.x, y: r.y, w: r.w, h: r.h, x0: o.x0, y0: o.y0 };
       App.dirty = true;
       break;
     }
     case "shape": {
-      App.tempShape.x1 = d.x; App.tempShape.y1 = d.y;
+      App.tempShape.x1 = snapVal(d.x, "x"); App.tempShape.y1 = snapVal(d.y, "y");
       App.dirty = true;
       break;
     }
     case "layer": {
-      const dx = Math.round(d.x - App.drag.sx), dy = Math.round(d.y - App.drag.sy);
+      let dx = d.x - App.drag.sx, dy = d.y - App.drag.sy;
+      [dx, dy] = snapMove(App.drag.bbox, dx, dy);
+      dx = Math.round(dx); dy = Math.round(dy);
       layer.ctx.clearRect(0, 0, App.docW, App.docH);
       layer.ctx.drawImage(App.drag.snap, dx, dy);
-      pushHistory("Pindah Lapisan");
       App.dirty = true;
       break;
     }
     case "float": {
-      App.floatSel.x = Math.round(d.x - App.drag.dx);
-      App.floatSel.y = Math.round(d.y - App.drag.dy);
+      const fs = App.floatSel;
+      let x = d.x - App.drag.dx, y = d.y - App.drag.dy;
+      const [ax, ay] = snapMove({ x, y, w: fs.canvas.width, h: fs.canvas.height }, 0, 0);
+      fs.x = Math.round(x + ax); fs.y = Math.round(y + ay);
       App.dirty = true;
       break;
     }
@@ -980,11 +1029,19 @@ function toolUp(e, p) {
       }
       break;
     }
+    case "layer": {
+      if (layer) { pushHistory("Pindah Lapisan"); updateLayerThumbs(); }
+      break;
+    }
     case "float": {
       if (App.floatSel && layer) {
         layer.ctx.drawImage(App.floatSel.canvas, App.floatSel.x, App.floatSel.y);
         const s = App.selection;
-        if (s) App.selection = { x: App.floatSel.x, y: App.floatSel.y, w: App.floatSel.canvas.width, h: App.floatSel.canvas.height, type: "rect" };
+        if (s) {
+          const ddx = App.floatSel.x - s.x, ddy = App.floatSel.y - s.y;
+          if (s.type === "lasso" && s.pts) App.selection = { type: "lasso", pts: s.pts.map(pt => [pt[0] + ddx, pt[1] + ddy]), x: App.floatSel.x, y: App.floatSel.y, w: App.floatSel.canvas.width, h: App.floatSel.canvas.height };
+          else App.selection = { x: App.floatSel.x, y: App.floatSel.y, w: App.floatSel.canvas.width, h: App.floatSel.canvas.height, type: "rect" };
+        }
         App.floatSel = null;
         pushHistory("Pindah Seleksi");
         updateLayerThumbs();
@@ -1079,17 +1136,21 @@ function showTextInput(sx, sy, dx, dy) {
 function hideTextInput() { if (textInputBox) { textInputBox.remove(); textInputBox = null; } }
 function commitText(x, y, text) {
   if (!text.trim()) return;
-  const l = activeLayer();
-  if (!l || l.locked) return toast("Lapisan terkunci / tidak ada", true);
-  pushHistory("Teks");
+  const cur = activeLayer();
+  if (cur && cur.locked) return toast("Lapisan terkunci", true);
+  const l = createLayer("Teks: " + text.trim().slice(0, 18));
+  if (cur) l.group = cur.isGroup ? cur.id : (cur.group || null);
+  App.layers.splice(clamp(layerIndex(App.activeLayerId) + 1, 0, App.layers.length), 0, l);
+  App.activeLayerId = l.id;
   l.ctx.save();
   l.ctx.globalAlpha = App.toolOpacity / 100;
   l.ctx.fillStyle = App.color;
-  l.ctx.font = `${App.fontItalic ? "italic " : ""}${App.fontBold ? "bold " : ""}${App.fontSize}px ${App.fontFamily}`;
+  l.ctx.font = `${App.fontItalic ? "italic " : ""}${App.fontBold ? "bold " : ""}${App.fontSize}px "${App.fontFamily}"`;
   l.ctx.textBaseline = "top";
   l.ctx.fillText(text, x, y);
   l.ctx.restore();
-  updateLayerThumbs();
+  pushHistory("Teks (lapisan baru)");
+  updateUI();
   App.dirty = true;
 }
 
@@ -1653,7 +1714,8 @@ const MENUS = {
     { sep: 1 },
     { label: "Simpan sebagai PNG", sc: "Ctrl+S", fn: savePNG },
     { label: "Simpan sebagai JPEG", fn: saveJPEG },
-    { label: "Ekspor sebagai PSD (lapisan + folder)…", fn: () => exportPSD() },
+    { label: "Ekspor sebagai PSD 8-bit (lapisan + folder)…", fn: () => exportPSD(8) },
+    { label: "Ekspor sebagai PSD 16-bit (lapisan + folder)…", fn: () => exportPSD(16) },
     { sep: 1 },
     { label: "Simpan Proyek (dengan lapisan)…", fn: saveProject },
     { label: "Buka Proyek…", fn: () => $("#proj-input").click() },
@@ -1700,8 +1762,18 @@ const MENUS = {
     { label: "100%", sc: "Ctrl+1", fn: () => { const cx = viewport.clientWidth / 2, cy = viewport.clientHeight / 2; zoomAt(1 / App.zoom, cx, cy); } },
     { sep: 1 },
     { label: "Tampilkan Grid", fn: () => { App.showGrid = !App.showGrid; App.dirty = true; toast("Grid " + (App.showGrid ? "aktif" : "mati")); } },
+    { label: () => (App.snap ? "✓ " : "   ") + "Snap (Tepi & Tengah Kanvas)", fn: () => { App.snap = !App.snap; buildMenus(); toast("Snap " + (App.snap ? "aktif" : "mati")); } },
+    { sep: 1 },
+    { label: () => (document.body.classList.contains("tab-mode") ? "✓ " : "   ") + "Mode Fokus (Tab)", sc: "Tab", fn: toggleTabMode },
+  ],
+  Font: [
+    { label: "Tambah Font dari File…", fn: () => $("#font-input").click() },
+    { label: "Daftar / Pilih Font…", fn: fontListDialog },
+    { sep: 1 },
+    { label: "Panduan Font (di mana menambah)…", fn: fontGuideDialog },
   ],
   Bantuan: [
+    { label: "Panduan (Font / Snap / PSD 16-bit)…", fn: helpGuideDialog },
     { label: "Pintasan Keyboard…", fn: shortcutsDialog },
     { label: "Tentang PS Lite", fn: aboutDialog },
   ],
@@ -1718,7 +1790,8 @@ function buildMenus() {
       if (it.sep) { const s = document.createElement("div"); s.className = "sep"; dd.appendChild(s); return; }
       const item = document.createElement("div");
       item.className = "item";
-      item.innerHTML = `<span>${it.label}</span><span class="sc">${it.sc || ""}</span>`;
+      const label = typeof it.label === "function" ? it.label() : it.label;
+      item.innerHTML = `<span>${label}</span><span class="sc">${it.sc || ""}</span>`;
       item.addEventListener("click", () => { m.classList.remove("open"); it.fn(); });
       dd.appendChild(item);
     });
@@ -1730,7 +1803,14 @@ function buildMenus() {
     });
     box.appendChild(m);
   });
-  document.addEventListener("click", () => $$(".menu").forEach(x => x.classList.remove("open")));
+  if (!buildMenus._bound) {
+    buildMenus._bound = true;
+    document.addEventListener("click", () => $$(".menu").forEach(x => x.classList.remove("open")));
+  }
+}
+function toggleTabMode() {
+  document.body.classList.toggle("tab-mode");
+  toast(document.body.classList.contains("tab-mode") ? "Mode fokus (tekan Tab lagi untuk kembali)" : "Panel ditampilkan");
 }
 function dialogResize() {
   showModal("Ukuran Gambar", `
@@ -1752,6 +1832,8 @@ function shortcutsDialog() {
     ["Hapus isi", "Del"], ["Ukuran kuas", "[ dan ]"], ["Tukar warna", "X"],
     ["Reset warna", "D"], ["Gabung ke bawah", "Ctrl+E"], ["Pas di layar", "Ctrl+0"],
     ["Zoom 100%", "Ctrl+1"], ["Batal (crop/teks)", "Esc"],
+    ["Mode fokus (sembunyikan panel)", "Tab"], ["Snap tepi/tengah (on/off)", "Tampilan → Snap"],
+    ["Grup / Ungroup lapisan", "⊞ / ⊟"], ["Tambah font", "＋ Font… (options bar Teks)"],
   ];
   showModal("Pintasan Keyboard", `
     <table class="shortcut-table">
@@ -1764,6 +1846,67 @@ function aboutDialog() {
     <p><b>PS Lite</b> v1.0 — editor foto gaya Photoshop.</p>
     <p style="margin-top:10px">Berjalan di browser desktop &amp; HP (PWA), aplikasi desktop Electron, dan Android (Capacitor).</p>
     <p style="margin-top:10px;color:var(--text2)">Tools: kuas, penghapus, ember cat, teks, bentuk, pangkas, seleksi, pindah lapisan, penetes warna + lapisan, blend mode, penyesuaian, filter, riwayat.</p>`);
+}
+async function addFontFiles(files) {
+  let added = 0;
+  for (const f of files) {
+    try {
+      const buf = await f.arrayBuffer();
+      const name = (f.name.replace(/\.[^.]+$/, "").trim() || "Font Kustom").slice(0, 40);
+      const ff = new FontFace(name, buf);
+      await ff.load();
+      document.fonts.add(ff);
+      if (!BASE_FONTS.includes(name) && !App.customFonts.includes(name)) App.customFonts.push(name);
+      App.fontFamily = name;
+      added++;
+    } catch (err) { toast("Gagal memuat font: " + f.name, true); }
+  }
+  if (added) {
+    toast(added + " font ditambahkan & aktif (berlaku selama sesi ini)");
+    updateOptionsBar(); updateStatus();
+  }
+}
+function selectFont(name) { App.fontFamily = name; updateOptionsBar(); toast("Font: " + name); }
+function fontListDialog() {
+  const all = [...BASE_FONTS, ...App.customFonts];
+  showModal("Daftar / Pilih Font", `
+    <div class="field"><label>Font tersedia (${all.length})</label>
+      <select id="fl-sel" style="width:100%">
+        ${all.map(f => `<option ${f === App.fontFamily ? "selected" : ""}>${f}</option>`).join("")}
+      </select>
+    </div>
+    <p style="margin-top:10px;color:var(--text2)">Font kustom dimuat dari file di komputer/HP dan <b>hanya aktif selama sesi ini</b>. Untuk font permanen, lihat <b>Font → Panduan Font</b>.</p>`, [
+    { label: "Tambah Font…", onClick: () => $("#font-input").click() },
+    { label: "Panduan Font", onClick: fontGuideDialog },
+    { label: "Pakai", primary: true, onClick: () => selectFont($("#fl-sel").value) },
+  ]);
+}
+function fontGuideDialog() {
+  showModal("Panduan Font — di mana menambah font", `
+    <p><b>1. Cepat, di dalam aplikasi (tanpa mengubah file):</b></p>
+    <ul style="margin:6px 0 10px 18px;line-height:1.6">
+      <li>Pilih tool <b>Teks (T)</b> → di options bar tekan <b>＋ Font…</b>, atau menu <b>Font → Tambah Font dari File…</b>.</li>
+      <li>Pilih satu/beberapa file <b>.ttf</b>, <b>.otf</b>, <b>.woff</b>, <b>.woff2</b>. Nama font = nama file.</li>
+      <li>Font langsung muncul di daftar font dan dipakai pada teks berikutnya.</li>
+      <li>Catatan: cara ini <b>sementara</b> (perlu ditambah lagi setelah aplikasi ditutup) dan font tidak ikut tersimpan ke proyek/PSD.</li>
+    </ul>
+    <p><b>2. Permanen (ikut ke web, desktop, dan Android):</b></p>
+    <ul style="margin:6px 0 10px 18px;line-height:1.6">
+      <li>Salin file font ke folder <code>photoshop-lite/fonts/</code>.</li>
+      <li>Tambahkan aturan <code>@font-face</code> di <code>style.css</code>, contoh:<br>
+        <code>@font-face { font-family: "Font Komik"; src: url("fonts/FontKomik.ttf"); }</code></li>
+      <li>Tambahkan nama font ke daftar <code>BASE_FONTS</code> di bagian atas <code>app.js</code> agar muncul di dropdown Teks.</li>
+      <li>Folder yang sama ikut terpaket saat build Electron (<code>npx electron-packager .</code>) dan Android (Capacitor <code>npx cap sync</code>), jadi font tersedia di semua platform.</li>
+    </ul>
+    <p><b>3. Untuk komik/webtoon:</b> font balon teks &amp; efek suara yang umum (mis. "Komika", "Anime Ace", "Bangers", "BadaBoom") bisa ditambahkan dengan cara di atas; pastikan lisensinya mengizinkan penggunaanmu.</p>`);
+}
+function helpGuideDialog() {
+  showModal("Panduan: Font / Snap / PSD 16-bit", `
+    <p><b>Snap (menempel)</b> — aktif secara baku, bisa dimatikan di <b>Tampilan → Snap</b>. Saat menggeser lapisan/seleksi dan menggambar bentuk, tepi &amp; titik tengah objek menempel ke <b>tepi kanvas</b>, <b>titik tengah</b>, dan garis grid (bila Grid aktif). Toleransi 6 px di layar.</p>
+    <p style="margin-top:8px"><b>Mode Fokus (Tab)</b> — tekan <b>Tab</b> untuk menyembunyikan menu, tool bar, options bar, dan semua panel agar kanvas penuh; tekan Tab lagi untuk kembali.</p>
+    <p style="margin-top:8px"><b>Ungroup per item</b> — di panel Lapisan pilih lapisan anggota folder lalu tekan tombol <b>⊟ (Ungroup)</b>; hanya lapisan itu yang keluar dari folder. Setiap teks kini dibuat sebagai <b>lapisan sendiri</b> ("Teks: …") sehingga bisa dipindah/ungroup satu per satu. <b>⊞</b> menggabungkan lapisan terpilih jadi folder baru, <b>▤</b> membuat folder kosong.</p>
+    <p style="margin-top:8px"><b>PSD 16-bit</b> — <b>Berkas → Ekspor sebagai PSD 16-bit</b> menulis 16 bit per kanal (nilai 8-bit diperhalus ke rentang 0–65535), cocok untuk cetak &amp; grading lanjutan; semua lapisan, folder, opasitas, mode campuran, dan visibilitas tetap ikut. Ukuran file ±2× PSD 8-bit.</p>
+    <p style="margin-top:8px"><b>Font</b> — lihat menu <b>Font → Panduan Font</b> untuk cara menambah font di dalam aplikasi maupun permanen melalui folder <code>fonts/</code>.</p>`);
 }
 
 /* ================= UI: TOOLBAR / OPTIONS ================= */
@@ -1832,11 +1975,12 @@ function updateOptionsBar() {
   } else if (t === "lasso") {
     html += `<label style="color:var(--text2)">Gambar bebas mengelilingi area, otomatis tertutup</label>`;
   } else if (t === "text") {
+    const fonts = [...BASE_FONTS, ...App.customFonts];
     html += `<label>Font
       <select id="ob-font">
-        ${["Arial", "Georgia", "Times New Roman", "Courier New", "Impact", "Verdana", "Trebuchet MS"].map(f =>
-          `<option ${f === App.fontFamily ? "selected" : ""}>${f}</option>`).join("")}
+        ${fonts.map(f => `<option ${f === App.fontFamily ? "selected" : ""}>${f}</option>`).join("")}
       </select></label>`;
+    html += `<button class="opt-btn" id="ob-addfont" title="Tambahkan font dari file .ttf / .otf / .woff">＋ Font…</button>`;
     html += `<label>Ukuran<input type="number" id="ob-fsize" min="6" max="400" value="${App.fontSize}">px</label>`;
     html += `<label class="chk"><input type="checkbox" id="ob-fbold" ${App.fontBold ? "checked" : ""}>Tebal</label>`;
     html += `<label class="chk"><input type="checkbox" id="ob-fit" ${App.fontItalic ? "checked" : ""}>Miring</label>`;
@@ -1888,6 +2032,7 @@ function updateOptionsBar() {
   const ps = $("#ob-preset");
   if (ps) ps.addEventListener("change", () => selectBrushPreset(ps.value));
   const f = $("#ob-font"); if (f) f.addEventListener("change", () => App.fontFamily = f.value);
+  const af = $("#ob-addfont"); if (af) af.addEventListener("click", () => $("#font-input").click());
   const gm = $("#ob-gradmode"); if (gm) gm.addEventListener("change", () => App.gradMode = gm.value);
   const fs = $("#ob-fsize"); if (fs) fs.addEventListener("change", () => App.fontSize = clamp(+fs.value, 6, 400));
   const fb = $("#ob-fbold"); if (fb) fb.addEventListener("change", () => App.fontBold = fb.checked);
@@ -2218,6 +2363,7 @@ document.addEventListener("keydown", e => {
   }
 
   const k = e.key.toLowerCase();
+  if (e.key === "Tab") { e.preventDefault(); toggleTabMode(); return; }
   if (k === "x") { [App.color, App.secondary] = [App.secondary, App.color]; updateColorUI(); return; }
   if (k === "d") { App.color = "#000000"; App.secondary = "#ffffff"; updateColorUI(); return; }
   if (k === "[") { App.brushSize = clamp(App.brushSize - 4, 1, 300); updateOptionsBar(); return; }
@@ -2252,6 +2398,10 @@ function init() {
   $("#proj-input").addEventListener("change", e => {
     const f = e.target.files[0];
     if (f) openProjectFile(f);
+    e.target.value = "";
+  });
+  $("#font-input").addEventListener("change", e => {
+    if (e.target.files.length) addFontFiles([...e.target.files]);
     e.target.value = "";
   });
 

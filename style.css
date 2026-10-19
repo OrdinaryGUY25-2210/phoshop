@@ -681,3 +681,10 @@ html, body {
   #menubar { padding: 0 4px; }
   .brand { display: none; }
 }
+
+/* Mode fokus (tombol Tab): sembunyikan semua panel, kanvas jadi penuh */
+body.tab-mode #menubar,
+body.tab-mode #optionsbar,
+body.tab-mode #toolbar,
+body.tab-mode #panels { display: none !important; }
+body.tab-mode #panel-toggle { display: none; }

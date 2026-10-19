@@ -1,5 +1,5 @@
 "use strict";
-/* Penulis PSD (RGB 8-bit, layer penuh, grup folder, RLE PackBits) */
+/* Penulis PSD (RGB 8/16-bit, layer penuh, grup folder, RLE PackBits) */
 const PSD_BLEND_KEYS = {
   "source-over": "norm", multiply: "mul ", screen: "scrn", overlay: "over",
   darken: "dark", lighten: "lite", "color-dodge": "div ", "color-burn": "idiv",
@@ -28,10 +28,10 @@ function psdPackRow(src) {
   }
   return out;
 }
-function psdRLE(plane, w, h) {
+function psdRLE(plane, rowLen, h) {
   const counts = [], data = [];
   for (let y = 0; y < h; y++) {
-    const row = psdPackRow(plane.subarray(y * w, (y + 1) * w));
+    const row = psdPackRow(plane.subarray(y * rowLen, (y + 1) * rowLen));
     counts.push(row.length);
     for (const b of row) data.push(b);
   }
@@ -39,6 +39,11 @@ function psdRLE(plane, w, h) {
   let o = 0;
   for (const c of counts) { out[o++] = c >> 8; out[o++] = c & 255; }
   out.set(data, o);
+  return out;
+}
+function psd16(plane) {
+  const n = plane.length, out = new Uint8Array(n * 2);
+  for (let i = 0; i < n; i++) { const v = plane[i]; out[i * 2] = v; out[i * 2 + 1] = v; }
   return out;
 }
 function psdPascalName(name) {
@@ -51,6 +56,9 @@ function psdPascalName(name) {
 
 function buildPSD(doc) {
   const { w, h, records, comp } = doc;
+  const depth = doc.depth === 16 ? 16 : 8;
+  const rowLen = w * depth / 8;
+  const rle = plane => depth === 16 ? psdRLE(psd16(plane), rowLen, h) : psdRLE(plane, rowLen, h);
   const parts = [];
   let total = 0;
   const push = arr => { parts.push(arr); total += arr.length; };
@@ -59,7 +67,7 @@ function buildPSD(doc) {
   const raw = s => push(new Uint8Array([...s].map(c => c.charCodeAt(0))));
 
   /* Header */
-  raw("8BPS"); u16(1); push(new Uint8Array(6)); u16(3); u32(h); u32(w); u16(8); u16(3);
+  raw("8BPS"); u16(1); push(new Uint8Array(6)); u16(3); u32(h); u32(w); u16(depth); u16(3);
   u32(0); /* color mode data */
   u32(0); /* image resources */
 
@@ -69,10 +77,10 @@ function buildPSD(doc) {
   for (const rec of records) {
     const divider = rec.divider || rec.groupStart;
     const chans = divider ? null : [
-      [0, psdRLE(rec.r, w, h)],
-      [1, psdRLE(rec.g, w, h)],
-      [2, psdRLE(rec.b, w, h)],
-      [65535, psdRLE(rec.a, w, h)],
+      [0, rle(rec.r)],
+      [1, rle(rec.g)],
+      [2, rle(rec.b)],
+      [65535, rle(rec.a)],
     ];
     const rb = [];
     const ru16 = v => rb.push(v >> 8 & 255, v & 255);
@@ -135,7 +143,7 @@ function buildPSD(doc) {
   u32(0); /* global layer mask */
 
   /* Composite image */
-  const chR = psdRLE(comp.r, w, h), chG = psdRLE(comp.g, w, h), chB = psdRLE(comp.b, w, h);
+  const chR = rle(comp.r), chG = rle(comp.g), chB = rle(comp.b);
   u16(1);
   push(chR); push(chG); push(chB);
 
@@ -154,7 +162,8 @@ function psdPlanesFromCanvas(c) {
   for (let i = 0; i < n; i++) { r[i] = d[i * 4]; g[i] = d[i * 4 + 1]; b[i] = d[i * 4 + 2]; a[i] = d[i * 4 + 3]; }
   return { r, g, b, a };
 }
-function exportPSD() {
+function exportPSD(depth) {
+  depth = depth === 16 ? 16 : 8;
   const w = App.docW, h = App.docH;
   const groupIds = new Set(App.layers.filter(l => l.isGroup).map(l => l.id));
   const records = [];
@@ -169,12 +178,12 @@ function exportPSD() {
     }
   }
   const comp = psdPlanesFromCanvas(compositeToCanvas(false));
-  const bytes = buildPSD({ w, h, records, comp });
+  const bytes = buildPSD({ w, h, records, comp, depth });
   const blob = new Blob([bytes], { type: "image/vnd.adobe.photoshop" });
   const a = document.createElement("a");
-  a.download = "editan-pslite.psd";
+  a.download = depth === 16 ? "editan-pslite-16bit.psd" : "editan-pslite.psd";
   a.href = URL.createObjectURL(blob);
   a.click();
   setTimeout(() => URL.revokeObjectURL(a.href), 5000);
-  toast("PSD diekspor (" + Math.round(bytes.length / 1048576) + " MB) — bisa dibuka di Photoshop / Photopea");
+  toast("PSD " + depth + "-bit diekspor (" + Math.round(bytes.length / 1048576) + " MB) — bisa dibuka di Photoshop / Photopea / CSP");
 }
