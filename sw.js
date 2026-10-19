@@ -1,9 +1,11 @@
-const CACHE = "pslite-v2";
+const CACHE = "pslite-v3";
 const ASSETS = [
   ".",
   "index.html",
   "style.css",
   "app.js",
+  "brushes.js",
+  "psd.js",
   "manifest.webmanifest",
   "icons/icon.svg",
 ];

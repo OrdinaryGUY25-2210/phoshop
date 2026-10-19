@@ -449,6 +449,43 @@ html, body {
 .layer-actions button:hover { background: var(--hover); }
 .layer-actions #layer-del:hover { background: #74302e; }
 
+/* Folder / grup lapisan */
+.layer-row.folder .lname { font-weight: 600; color: #cfd8e6; }
+.layer-row.member { padding-left: 20px; background: rgba(255,255,255,.025); }
+.layer-row .folder-ico {
+  width: 44px; height: 33px; flex-shrink: 0;
+  display: flex; align-items: center; justify-content: center;
+  background: var(--panel3);
+  border: 1px solid #000; border-radius: 3px;
+  color: #e6c548; font-size: 15px;
+}
+.layer-row .chev { margin-right: 4px; color: var(--text2); cursor: pointer; }
+.layer-row .chev:hover { color: #fff; }
+
+/* Panel kuas komik */
+.brush-grid {
+  display: grid;
+  grid-template-columns: repeat(2, 1fr);
+  gap: 5px;
+}
+.brush-item {
+  display: flex; flex-direction: column; align-items: center; gap: 3px;
+  background: var(--panel3);
+  border: 1px solid var(--border2);
+  border-radius: 5px;
+  padding: 5px 3px;
+  cursor: pointer;
+  color: var(--text);
+}
+.brush-item:hover { background: var(--hover); }
+.brush-item.on { border-color: var(--accent); background: #24405e; }
+.brush-item canvas {
+  width: 100%; height: 40px;
+  border-radius: 3px;
+  background: #242424;
+}
+.brush-item span { font-size: 10.5px; line-height: 1.1; text-align: center; }
+
 /* History */
 #history-list { display: flex; flex-direction: column; gap: 2px; max-height: 200px; overflow-y: auto; }
 .hist-item {

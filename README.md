@@ -10,11 +10,14 @@ Aplikasi editor foto **satu codebase untuk 3 platform**:
 
 ## Fitur lengkap
 
-- **Tools (kiri):** Pindah, Kotak Pilih (seleksi), Pangkas, Kuas (ukuran/kekerasan/opasitas), Penghapus, Ember Cat (toleransi), Penetes Warna, Teks (font/tebal/miring), Bentuk (persegi/lingkaran — isi/tepi), Zoom, Tangan
-- **Lapisan:** tambah, duplikat, hapus, naik/turun, gabung ke bawah, ratakan, visibilitas, kunci, opasitas, 16 mode blend (multiply, screen, overlay, dll.), rename (klik ganda)
-- **Penyesuaian (preview langsung):** Kecerahan/Kontras, Rona/Saturasi/Cahaya
-- **Filter:** Blur, Blur Cepat, Perjelas, Invert, Grayscale, Sepia, Noise
-- **Lainnya:** Riwayat (undo/redo, klik langkah), grid, simpan PNG/JPEG, buka seret-dan-lepas, zoom roda mouse + **pinch zoom di HP**
+- **Tools (kiri):** Pindah, Kotak Pilih (seleksi), **Lasso**, Pangkas, Kuas, Penghapus, Ember Cat (toleransi), **Gradasi**, Penetes Warna, Teks (font/tebal/miring), Bentuk (persegi/lingkaran/garis — isi/tepi), Zoom, Tangan
+- **Kuas Komik / Webtoon (panel Kanan):** 20 preset — G-Pen, Mapping Pen, R-Pen Maru, Brush Pen, Tinta Air, Pensil, Cat Air, Airbrush, Arang, **Screentone** (titik besar/sedang/halus, garis, silang — pola sejajar dokumen), **Speed Lines**, Kilau/Star, Cipratan, Asap/Kabut, Gores Abstrak, Cahaya Lembut. Tekanan stylus (Pointer Events) didukung untuk pena ± tipis.
+- **Lapisan:** tambah, duplikat, hapus, naik/turun, gabung ke bawah, ratakan, visibilitas, kunci, opasitas, 16 mode blend, rename, **folder (grup/ungroup)**: buat folder, masukkan lapisan, lepas dari folder, buka/tutup, sembunyikan seluruh folder (ikut ekspor PSD)
+- **Penyesuaian (preview langsung):** Kecerahan/Kontras, Rona/Saturasi/Cahaya, **Levels**
+- **Filter:** Blur, Blur Cepat, Perjelas, Invert, Grayscale, Sepia, Noise, **Mosaic, Emboss, Find Edges**
+- **Transformasi:** **Free Transform (Ctrl+T)** — skala/putar/pindah; **Putar 90°/cermin kanvas**
+- **Ekspor:** PNG, JPEG, **PSD (RGB 8-bit, lapisan + folder, RLE)** — bisa dibuka di Photoshop/Photopea/CSP; simpan/buka **proyek JSON** (semua lapisan utuh)
+- **Lainnya:** Riwayat (undo/redo, klik langkah), grid, buka seret-dan-lepas, zoom roda mouse + **pinch zoom di HP**
 - **UI responsif:** desktop = toolbar kiri + panel kanan; HP = toolbar bawah + panel laci (tombol ☰ Panel)
 
 ## Cara menjalankan
@@ -66,6 +69,8 @@ Install APK ke HP (`adb install …`) atau langsung Run dari Android Studio.
 | X / D | tukar / reset warna |
 | Spasi (tahan) | geser kanvas |
 | Ctrl+0 / Ctrl+1 | pas di layar / 100% |
+| Ctrl+T | Free Transform (Enter = selesai, Esc = batal) |
+| Ctrl+L / Ctrl+U | Levels / Hue-Saturation |
 | Enter / Esc | terapkan / batalkan pangkasan |
 
 ## Struktur file
@@ -74,7 +79,9 @@ Install APK ke HP (`adb install …`) atau langsung Run dari Android Studio.
 photoshop-lite/
 ├── index.html            # UI utama
 ├── style.css             # tema gelap + responsif (desktop & mobile)
-├── app.js                # engine editor (tools, lapisan, filter, riwayat, touch)
+├── app.js                # engine editor (tools, lapisan, folder, filter, riwayat, touch)
+├── brushes.js            # engine brush komik/webtoon + 20 preset
+├── psd.js                # penulis file PSD (lapisan + folder, PackBits RLE)
 ├── manifest.webmanifest  # manifest PWA
 ├── sw.js                 # service worker (offline)
 ├── gen-icons.js          # generator icon PNG opsional: node gen-icons.js
@@ -89,3 +96,6 @@ photoshop-lite/
 - Icon default SVG (cukup untuk Chrome/Edge). Ingin PNG? jalankan `node gen-icons.js`, lalu tambahkan entri PNG di `manifest.webmanifest`.
 - Riwayat menyimpan 30 langkah terakhir per dokumen.
 - Kanvas besar + banyak lapisan bisa memakan RAM — dokumen ≤ ~4000px nyaman di HP.
+- Brush Photoshop (`.abr`) tidak bisa diimpor; brush di sini adalah engine sendiri yang dioptimalkan untuk komik/webtoon.
+- PSD diekspor RGB 8-bit (bukan 16-bit), full-canvas per lapisan, blend mode & folder ikut. Import PSD belum didukung — pakai proyek JSON untuk menyimpan pekerjaan.
+- Kanvas vertikal panjang (webtoon) didukung (maks 8000px per sisi saat buat dokumen).

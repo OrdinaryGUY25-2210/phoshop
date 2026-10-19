@@ -63,6 +63,13 @@
       </section>
 
       <section class="panel">
+        <h3>Kuas Komik (Webtoon)</h3>
+        <div class="panel-body">
+          <div id="brush-grid" class="brush-grid"></div>
+        </div>
+      </section>
+
+      <section class="panel">
         <h3>Penyesuaian &amp; Filter</h3>
         <div class="panel-body">
           <div id="adjust-grid" class="btn-grid"></div>
@@ -98,11 +105,14 @@
           <div id="layer-list"></div>
           <div class="layer-actions">
             <button id="layer-new" title="Lapisan baru">＋</button>
+            <button id="layer-folder" title="Folder baru">▤</button>
+            <button id="layer-group" title="Masukkan lapisan ke folder">⊞</button>
+            <button id="layer-ungroup" title="Lepas dari folder">⊟</button>
             <button id="layer-dup" title="Duplikat lapisan">⧉</button>
             <button id="layer-merge" title="Gabung ke bawah (Ctrl+E)">⤵</button>
             <button id="layer-up" title="Naikkan">▲</button>
             <button id="layer-down" title="Turunkan">▼</button>
-            <button id="layer-del" title="Hapus lapisan">✕</button>
+            <button id="layer-del" title="Hapus lapisan/folder">✕</button>
           </div>
         </div>
       </section>
@@ -129,6 +139,8 @@
 <div id="toast"></div>
 <input type="file" id="file-input" accept="image/*" hidden>
 <input type="file" id="proj-input" accept=".json,application/json" hidden>
+<script src="brushes.js"></script>
+<script src="psd.js"></script>
 <script src="app.js"></script>
 </body>
 </html>

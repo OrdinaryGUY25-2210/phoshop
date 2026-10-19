@@ -13,6 +13,7 @@ const App = {
   zoom: 1, panX: 0, panY: 0,
   color: "#000000", secondary: "#ffffff",
   brushSize: 24, hardness: 100, toolOpacity: 100,
+  brushPreset: BRUSH_PRESETS[0],
   bucketTolerance: 32,
   shapeType: "rect", shapeMode: "fill",
   gradMode: "fgt",
@@ -112,13 +113,24 @@ function createLayer(name, w = App.docW, h = App.docH) {
   return {
     id: uid(), name, canvas, ctx: makeCtx(canvas),
     visible: true, opacity: 100, locked: false, blendMode: "source-over",
+    isGroup: false, group: null, expanded: true,
   };
 }
 function activeLayer() { return App.layers.find(l => l.id === App.activeLayerId) || null; }
 function layerIndex(id) { return App.layers.findIndex(l => l.id === id); }
+function isLayerVisible(l) {
+  if (!l.visible) return false;
+  if (l.group) {
+    const g = App.layers.find(x => x.id === l.group);
+    if (g && !g.visible) return false;
+  }
+  return true;
+}
 
 function addLayer(name, above = true) {
   const l = createLayer(name || `Lapisan ${App.layers.length + 1}`);
+  const a = activeLayer();
+  if (a) l.group = a.isGroup ? a.id : (a.group || null);
   const i = layerIndex(App.activeLayerId);
   const at = above ? i + 1 : i;
   App.layers.splice(clamp(at, 0, App.layers.length), 0, l);
@@ -130,13 +142,56 @@ function deleteLayer() {
   if (App.layers.length <= 1) return toast("Minimal satu lapisan", true);
   const l = App.layers[i];
   if (l.locked) return toast("Lapisan terkunci", true);
+  if (l.isGroup) {
+    App.layers.filter(m => m.group === l.id).forEach(m => m.group = null);
+    App.layers.splice(i, 1);
+    App.activeLayerId = App.layers[Math.max(0, i - 1)].id;
+    pushHistory("Hapus Folder"); updateUI();
+    toast("Folder dihapus — lapisan di dalamnya tetap ada");
+    return;
+  }
   App.layers.splice(i, 1);
   App.activeLayerId = App.layers[Math.max(0, i - 1)].id;
   pushHistory("Hapus Lapisan"); updateUI();
 }
+function newGroup() {
+  const g = createLayer(`Folder ${App.layers.filter(l => l.isGroup).length + 1}`);
+  g.isGroup = true;
+  const i = layerIndex(App.activeLayerId);
+  App.layers.splice(clamp(i + 1, 0, App.layers.length), 0, g);
+  App.activeLayerId = g.id;
+  pushHistory("Folder Baru"); updateUI();
+}
+function groupSelected() {
+  const l = activeLayer(); if (!l) return;
+  if (l.isGroup) return toast("Sudah folder", true);
+  if (l.group) return toast("Sudah berada di folder", true);
+  const g = createLayer(`Folder ${App.layers.filter(x => x.isGroup).length + 1}`);
+  g.isGroup = true;
+  App.layers.splice(layerIndex(l.id), 0, g);
+  l.group = g.id;
+  pushHistory("Kelompokkan"); updateUI();
+}
+function ungroupSelected() {
+  const l = activeLayer(); if (!l) return;
+  if (l.isGroup) {
+    const i = layerIndex(l.id);
+    App.layers.splice(i, 1);
+    const members = App.layers.filter(m => m.group === l.id);
+    members.forEach(m => m.group = null);
+    App.activeLayerId = members.length ? members[0].id : App.layers[Math.max(0, i - 1)].id;
+    pushHistory("Lepas Folder"); updateUI();
+    toast("Folder dilepas — lapisan tetap ada");
+  } else if (l.group) {
+    l.group = null;
+    pushHistory("Lepas dari Folder"); updateUI();
+  } else toast("Lapisan tidak di dalam folder", true);
+}
 function duplicateLayer() {
   const src = activeLayer(); if (!src) return;
+  if (src.isGroup) return toast("Folder tidak bisa diduplikat", true);
   const l = createLayer(src.name + " salinan");
+  l.group = src.group;
   l.ctx.drawImage(src.canvas, 0, 0);
   l.opacity = src.opacity; l.blendMode = src.blendMode;
   const i = layerIndex(src.id);
@@ -155,6 +210,7 @@ function mergeDown() {
   const i = layerIndex(App.activeLayerId);
   if (i <= 0) return toast("Tidak ada lapisan di bawah", true);
   const below = App.layers[i - 1], above = App.layers[i];
+  if (below.isGroup || above.isGroup) return toast("Folder tidak bisa digabung", true);
   if (below.locked) return toast("Lapisan bawah terkunci", true);
   below.ctx.globalAlpha = above.opacity / 100;
   below.ctx.drawImage(above.canvas, 0, 0);
@@ -168,7 +224,7 @@ function flattenImage() {
   flat.ctx.fillStyle = "#ffffff";
   flat.ctx.fillRect(0, 0, App.docW, App.docH);
   for (const l of App.layers) {
-    if (!l.visible) continue;
+    if (l.isGroup || !isLayerVisible(l)) continue;
     flat.ctx.globalAlpha = l.opacity / 100;
     flat.ctx.globalCompositeOperation = l.blendMode;
     flat.ctx.drawImage(l.canvas, 0, 0);
@@ -186,6 +242,7 @@ function snapshot() {
     layers: App.layers.map(l => ({
       id: l.id, name: l.name, visible: l.visible, opacity: l.opacity,
       locked: l.locked, blendMode: l.blendMode, canvas: cloneCanvas(l.canvas),
+      isGroup: !!l.isGroup, group: l.group || null, expanded: l.expanded !== false,
     })),
   };
 }
@@ -205,6 +262,7 @@ function jumpTo(i) {
   App.layers = s.layers.map(sl => ({
     id: sl.id, name: sl.name, visible: sl.visible, opacity: sl.opacity,
     locked: sl.locked, blendMode: sl.blendMode,
+    isGroup: !!sl.isGroup, group: sl.group || null, expanded: sl.expanded !== false,
     canvas: sl.canvas, ctx: makeCtx(sl.canvas),
   }));
   App.activeLayerId = s.activeLayerId;
@@ -269,7 +327,7 @@ function render() {
   cctx.setTransform(1, 0, 0, 1, 0, 0);
   cctx.clearRect(0, 0, App.docW, App.docH);
   for (const l of App.layers) {
-    if (!l.visible) continue;
+    if (l.isGroup || !isLayerVisible(l)) continue;
     cctx.globalAlpha = l.opacity / 100;
     cctx.globalCompositeOperation = l.blendMode;
     cctx.drawImage(l.canvas, 0, 0);
@@ -441,6 +499,7 @@ function contentBBox(l) {
 function startTransform() {
   const l = activeLayer();
   if (!l || l.locked) return toast("Lapisan terkunci / tidak ada", true);
+  if (l.isGroup) return toast("Folder tidak bisa ditransformasi", true);
   const bbox = contentBBox(l);
   if (!bbox) return toast("Lapisan kosong", true);
   App.transform = { snap: cloneCanvas(l.canvas), bbox, cx: bbox.x + bbox.w / 2, cy: bbox.y + bbox.h / 2, ang: 0, sx: 1, sy: 1, tx: 0, ty: 0, mode: null };
@@ -658,6 +717,9 @@ function toolDown(e, p) {
   if (App.transform) { transformDown(p); return; }
   const d = screenToDoc(p.x, p.y);
   const layer = activeLayer();
+  if (layer && layer.isGroup && ["brush", "eraser", "bucket", "gradient", "move", "text", "shape"].includes(App.tool)) {
+    return toast("Folder aktif — pilih lapisan biasa", true);
+  }
   switch (App.tool) {
     case "lasso": {
       App.drag = { type: "lasso" };
@@ -672,9 +734,10 @@ function toolDown(e, p) {
     }
     case "brush": {
       if (!layer || layer.locked) return toast("Lapisan terkunci / tidak ada", true);
-      App.stroke = { last: d, color: App.color };
+      const pr = (e.pointerType && e.pointerType !== "mouse" && e.pressure > 0) ? e.pressure : 1;
+      App.stroke = { last: d, color: App.color, pressure: pr, cells: new Set() };
       sctx.clearRect(0, 0, App.docW, App.docH);
-      stampAt(sctx, d.x, d.y);
+      stampAt(sctx, d.x, d.y, 0, pr, App.stroke.cells);
       App.dirty = true;
       break;
     }
@@ -790,6 +853,7 @@ function toolMove(e, p) {
 
   if (App.stroke && App.stroke.erase) { eraseAt(d.x, d.y); App.stroke.last = d; App.dirty = true; return; }
   if (App.stroke) {
+    if (e.pointerType && e.pointerType !== "mouse" && e.pressure > 0) App.stroke.pressure = e.pressure;
     lineStamp(sctx, App.stroke.last, d);
     App.stroke.last = d;
     App.dirty = true;
@@ -933,27 +997,24 @@ function toolUp(e, p) {
 }
 
 /* brush stamping */
-function stampAt(ctx, x, y) {
-  const r = App.brushSize / 2;
-  const hard = App.hardness / 100;
-  const { r: cr, g: cg, b: cb } = hexToRgb(ctx === sctx ? App.stroke.color : App.color);
-  if (hard >= 0.98) {
-    ctx.fillStyle = `rgb(${cr},${cg},${cb})`;
-    ctx.beginPath(); ctx.arc(x, y, r, 0, Math.PI * 2); ctx.fill();
-  } else {
-    const g = ctx.createRadialGradient(x, y, Math.max(0.5, r * hard), x, y, r);
-    g.addColorStop(0, `rgba(${cr},${cg},${cb},1)`);
-    g.addColorStop(1, `rgba(${cr},${cg},${cb},0)`);
-    ctx.fillStyle = g;
-    ctx.beginPath(); ctx.arc(x, y, r, 0, Math.PI * 2); ctx.fill();
-  }
+function stampAt(ctx, x, y, angle = 0, pressure = 1, cells = null) {
+  const hex = ctx === sctx ? App.stroke.color : App.color;
+  BrushFX.stamp(ctx, x, y, {
+    preset: App.brushPreset, size: App.brushSize, angle, pressure, cells,
+    color: hex, colorHexA0: hex + "00",
+  });
 }
 function lineStamp(ctx, a, b) {
+  const p = App.brushPreset;
   const dist = Math.hypot(b.x - a.x, b.y - a.y);
-  const step = Math.max(1, App.brushSize * 0.12);
+  const step = Math.max(1, App.brushSize * (p.spacing || 0.12));
   const n = Math.max(1, Math.ceil(dist / step));
+  const ang = Math.atan2(b.y - a.y, b.x - a.x);
+  const st = App.stroke;
+  const pr = st && st.pressure ? st.pressure : 1;
+  const cells = st && st.cells ? st.cells : null;
   for (let i = 1; i <= n; i++) {
-    stampAt(ctx, a.x + (b.x - a.x) * i / n, a.y + (b.y - a.y) * i / n);
+    stampAt(ctx, a.x + (b.x - a.x) * i / n, a.y + (b.y - a.y) * i / n, ang, pr, cells);
   }
 }
 function eraseAt(x, y) {
@@ -1035,6 +1096,7 @@ function commitText(x, y, text) {
 /* ================= EDIT ACTIONS ================= */
 function fillWith(hex, clear) {
   const l = activeLayer(); if (!l || l.locked) return toast("Lapisan terkunci / tidak ada", true);
+  if (l.isGroup) return toast("Folder aktif — pilih lapisan biasa", true);
   if (App.selection && App.selection.type === "lasso") {
     l.ctx.save();
     l.ctx.clip(selPath2D(App.selection));
@@ -1051,6 +1113,7 @@ function fillWith(hex, clear) {
 }
 function clearAction() {
   const l = activeLayer(); if (!l || l.locked) return toast("Lapisan terkunci / tidak ada", true);
+  if (l.isGroup) return toast("Folder aktif — pilih lapisan biasa", true);
   if (App.selection && App.selection.type === "lasso") {
     l.ctx.save();
     l.ctx.clip(selPath2D(App.selection));
@@ -1099,6 +1162,7 @@ function resizeImage(nw, nh) {
 function withLayer(label, fn) {
   const l = activeLayer();
   if (!l || l.locked) return toast("Lapisan terkunci / tidak ada", true);
+  if (l.isGroup) return toast("Folder aktif — pilih lapisan biasa", true);
   fn(l);
   pushHistory(label);
   updateLayerThumbs();
@@ -1422,9 +1486,11 @@ async function saveProject() {
   const data = {
     v: 1, w: App.docW, h: App.docH,
     activeIndex: Math.max(0, layerIndex(App.activeLayerId)),
-    layers: App.layers.map(l => ({
+    layers: App.layers.map((l, i) => ({
       name: l.name, visible: l.visible, opacity: l.opacity, locked: l.locked,
-      blendMode: l.blendMode, data: l.canvas.toDataURL("image/png"),
+      blendMode: l.blendMode, isGroup: !!l.isGroup,
+      group: l.group != null ? App.layers.findIndex(x => x.id === l.group) : null,
+      expanded: l.expanded !== false, data: l.canvas.toDataURL("image/png"),
     })),
   };
   const blob = new Blob([JSON.stringify(data)], { type: "application/json" });
@@ -1440,16 +1506,24 @@ async function openProjectFile(file) {
     const data = JSON.parse(await file.text());
     if (!data.layers || !data.w) throw new Error("format");
     const layers = [];
+    const idMap = new Map();
     for (const sl of data.layers) {
       const img = await loadImage(sl.data);
       const c = document.createElement("canvas");
       c.width = data.w; c.height = data.h;
       c.getContext("2d").drawImage(img, 0, 0);
+      const nid = uid();
+      idMap.set(sl.__i, nid);
       layers.push({
-        id: uid(), name: sl.name, visible: sl.visible, opacity: sl.opacity,
+        id: nid, name: sl.name, visible: sl.visible, opacity: sl.opacity,
         locked: sl.locked, blendMode: sl.blendMode || "source-over", canvas: c, ctx: makeCtx(c),
+        isGroup: !!sl.isGroup, group: null, expanded: sl.expanded !== false, __i: layers.length,
       });
     }
+    layers.forEach((l, i) => {
+      const sl = data.layers[i];
+      if (sl.group != null) l.group = idMap.get(sl.group) || null;
+    });
     App.docW = data.w; App.docH = data.h;
     ensureComposite();
     App.layers = layers;
@@ -1532,7 +1606,7 @@ function compositeToCanvas(whiteBg) {
   const cc = c.getContext("2d");
   if (whiteBg) { cc.fillStyle = "#fff"; cc.fillRect(0, 0, c.width, c.height); }
   for (const l of App.layers) {
-    if (!l.visible) continue;
+    if (l.isGroup || !isLayerVisible(l)) continue;
     cc.globalAlpha = l.opacity / 100;
     cc.globalCompositeOperation = l.blendMode;
     cc.drawImage(l.canvas, 0, 0);
@@ -1579,6 +1653,7 @@ const MENUS = {
     { sep: 1 },
     { label: "Simpan sebagai PNG", sc: "Ctrl+S", fn: savePNG },
     { label: "Simpan sebagai JPEG", fn: saveJPEG },
+    { label: "Ekspor sebagai PSD (lapisan + folder)…", fn: () => exportPSD() },
     { sep: 1 },
     { label: "Simpan Proyek (dengan lapisan)…", fn: saveProject },
     { label: "Buka Proyek…", fn: () => $("#proj-input").click() },
@@ -1732,7 +1807,15 @@ function updateOptionsBar() {
   const slider = (id, label, min, max, val, unit = "") =>
     `<label>${label}<input type="range" id="ob-${id}" min="${min}" max="${max}" value="${val}"><span class="val" id="obv-${id}">${val}${unit}</span></label>`;
 
-  if (t === "brush" || t === "eraser") {
+  if (t === "brush") {
+    const cats = [...new Set(BRUSH_PRESETS.map(p => p.cat))];
+    html += `<label>Kuas <select id="ob-preset">` + cats.map(cat =>
+      `<optgroup label="${cat}">` + BRUSH_PRESETS.filter(p => p.cat === cat).map(p =>
+        `<option value="${p.id}" ${App.brushPreset === p ? "selected" : ""}>${p.name}</option>`).join("") + `</optgroup>`).join("") + `</select></label>`;
+    html += slider("size", "Ukuran", 1, 300, App.brushSize, "px");
+    html += slider("op", "Opasitas", 1, 100, App.toolOpacity, "%");
+    html += slider("scat", "Sebaran", 0, 100, Math.round((App.brushPreset.scatter || 0) * 100));
+  } else if (t === "eraser") {
     html += slider("size", "Ukuran", 1, 300, App.brushSize, "px");
     html += slider("op", "Opasitas", 1, 100, App.toolOpacity, "%");
     html += slider("hard", "Kekerasan", 0, 100, App.hardness, "%");
@@ -1800,6 +1883,10 @@ function updateOptionsBar() {
     });
   };
   s("size", "brushSize", "px"); s("op", "toolOpacity", "%"); s("hard", "hardness", "%"); s("tol", "bucketTolerance");
+  const scEl = $("#ob-scat");
+  if (scEl) scEl.addEventListener("input", () => { App.brushPreset.scatter = (+scEl.value) / 100; });
+  const ps = $("#ob-preset");
+  if (ps) ps.addEventListener("change", () => selectBrushPreset(ps.value));
   const f = $("#ob-font"); if (f) f.addEventListener("change", () => App.fontFamily = f.value);
   const gm = $("#ob-gradmode"); if (gm) gm.addEventListener("change", () => App.gradMode = gm.value);
   const fs = $("#ob-fsize"); if (fs) fs.addEventListener("change", () => App.fontSize = clamp(+fs.value, 6, 400));
@@ -1892,22 +1979,87 @@ function buildAdjustGrid() {
 }
 
 /* ================= UI: LAYERS PANEL ================= */
+/* ================= UI: BRUSH PANEL ================= */
+function drawBrushPreview(c, p) {
+  const x = c.getContext("2d");
+  x.fillStyle = "#242424"; x.fillRect(0, 0, c.width, c.height);
+  if (p.type === "tile") {
+    const pat = x.createPattern(BrushFX.tipFor(p), "repeat");
+    x.fillStyle = pat;
+    x.fillRect(0, 0, c.width, c.height);
+    return;
+  }
+  for (let i = 0; i < 24; i++) {
+    const t = i / 23;
+    BrushFX.stamp(x, 7 + t * (c.width - 14), c.height - 6 - t * (c.height - 12) + Math.sin(t * 7) * 2, {
+      preset: p, size: Math.max(3, Math.min(14, (p.size || 10) * 0.45)),
+      angle: -0.7, pressure: 1, cells: null,
+      color: "#e8e8e8", colorHexA0: "#e8e8e800",
+    });
+  }
+}
+function markBrushPreset() {
+  $$("#brush-grid .brush-item").forEach(el => {
+    el.classList.toggle("on", BRUSH_PRESETS.find(x => x.id === el.dataset.id) === App.brushPreset);
+  });
+}
+function selectBrushPreset(id) {
+  const p = BRUSH_PRESETS.find(x => x.id === id); if (!p) return;
+  App.brushPreset = p;
+  App.brushSize = p.size || App.brushSize;
+  if (p.hardness != null) App.hardness = p.hardness;
+  if (p.opacity != null) App.toolOpacity = p.opacity;
+  setTool("brush");
+  updateOptionsBar();
+  markBrushPreset();
+  toast("Kuas: " + p.name);
+}
+function buildBrushPanel() {
+  const box = $("#brush-grid");
+  if (!box) return;
+  box.innerHTML = "";
+  BRUSH_PRESETS.forEach(p => {
+    const b = document.createElement("button");
+    b.className = "brush-item" + (App.brushPreset === p ? " on" : "");
+    b.dataset.id = p.id;
+    b.title = p.cat + " — " + p.name;
+    b.innerHTML = `<canvas width="72" height="40"></canvas><span>${p.name}</span>`;
+    drawBrushPreview(b.querySelector("canvas"), p);
+    b.addEventListener("click", () => selectBrushPreset(p.id));
+    box.appendChild(b);
+  });
+}
+
 function renderLayerList() {
   const box = $("#layer-list");
   box.innerHTML = "";
   const rev = [...App.layers].reverse();
   rev.forEach(l => {
+    if (l.group) {
+      const g = App.layers.find(x => x.id === l.group);
+      if (g && g.expanded === false) return;
+    }
     const row = document.createElement("div");
-    row.className = "layer-row" + (l.id === App.activeLayerId ? " active" : "");
-      row.innerHTML = `
+    row.className = "layer-row" + (l.id === App.activeLayerId ? " active" : "") + (l.isGroup ? " folder" : "") + (l.group ? " member" : "");
+    const chev = l.isGroup ? `<span class="chev" title="Buka/Tutup">${l.expanded === false ? "▸" : "▾"}</span>` : "";
+    row.innerHTML = `
       <button class="eye ${l.visible ? "" : "off"}" title="Visibilitas">${l.visible ? "◉" : "○"}</button>
-      <canvas width="44" height="33"></canvas>
-      <div class="lname">${l.name}</div>
+      ${l.isGroup ? '<span class="folder-ico">▤</span>' : '<canvas width="44" height="33"></canvas>'}
+      <div class="lname">${chev}${l.name}</div>
       <button class="lock ${l.locked ? "on" : ""}" title="Kunci">${l.locked ? "■" : "□"}</button>`;
-    const c = row.querySelector("canvas");
-    const cc = c.getContext("2d");
-    const scale = Math.min(44 / App.docW, 33 / App.docH);
-    cc.drawImage(l.canvas, (44 - App.docW * scale) / 2, (33 - App.docH * scale) / 2, App.docW * scale, App.docH * scale);
+    if (!l.isGroup) {
+      const c = row.querySelector("canvas");
+      const cc = c.getContext("2d");
+      const scale = Math.min(44 / App.docW, 33 / App.docH);
+      cc.drawImage(l.canvas, (44 - App.docW * scale) / 2, (33 - App.docH * scale) / 2, App.docW * scale, App.docH * scale);
+    } else {
+      const ch = row.querySelector(".chev");
+      if (ch) ch.addEventListener("click", e => {
+        e.stopPropagation();
+        l.expanded = l.expanded === false;
+        renderLayerList();
+      });
+    }
     row.addEventListener("click", () => {
       App.activeLayerId = l.id;
       renderLayerList(); syncLayerControls(); updateStatus();
@@ -1939,9 +2091,11 @@ function renderLayerList() {
   });
   const al = activeLayer();
   if (al) {
-    $("#blend-select").value = al.blendMode;
-    $("#layer-opacity").value = al.opacity;
-    $("#layer-op-val").textContent = al.opacity + "%";
+    $("#blend-select").value = al.isGroup ? "source-over" : al.blendMode;
+    $("#blend-select").disabled = !!al.isGroup;
+    $("#layer-opacity").disabled = !!al.isGroup;
+    $("#layer-opacity").value = al.isGroup ? 100 : al.opacity;
+    $("#layer-op-val").textContent = (al.isGroup ? 100 : al.opacity) + "%";
   }
 }
 function updateLayerThumbs() {
@@ -1951,12 +2105,17 @@ function updateLayerThumbs() {
 function syncLayerControls() {
   const al = activeLayer();
   if (!al) return;
-  $("#blend-select").value = al.blendMode;
-  $("#layer-opacity").value = al.opacity;
-  $("#layer-op-val").textContent = al.opacity + "%";
+  $("#blend-select").value = al.isGroup ? "source-over" : al.blendMode;
+  $("#blend-select").disabled = !!al.isGroup;
+  $("#layer-opacity").disabled = !!al.isGroup;
+  $("#layer-opacity").value = al.isGroup ? 100 : al.opacity;
+  $("#layer-op-val").textContent = (al.isGroup ? 100 : al.opacity) + "%";
 }
 function bindLayerUI() {
   $("#layer-new").addEventListener("click", () => { addLayer(); pushHistory("Lapisan Baru"); updateUI(); });
+  $("#layer-folder").addEventListener("click", newGroup);
+  $("#layer-group").addEventListener("click", groupSelected);
+  $("#layer-ungroup").addEventListener("click", ungroupSelected);
   $("#layer-dup").addEventListener("click", duplicateLayer);
   $("#layer-del").addEventListener("click", deleteLayer);
   $("#layer-up").addEventListener("click", () => moveLayer(1));
@@ -1964,11 +2123,12 @@ function bindLayerUI() {
   $("#layer-merge").addEventListener("click", mergeDown);
   $("#blend-select").addEventListener("change", e => {
     const l = activeLayer(); if (!l) return;
+    if (l.isGroup) return toast("Blend mode folder tidak didukung", true);
     l.blendMode = e.target.value;
     pushHistory("Mode Gabungan"); App.dirty = true;
   });
   $("#layer-opacity").addEventListener("input", e => {
-    const l = activeLayer(); if (!l) return;
+    const l = activeLayer(); if (!l || l.isGroup) return;
     l.opacity = +e.target.value;
     $("#layer-op-val").textContent = l.opacity + "%";
     App.dirty = true;
@@ -2075,6 +2235,7 @@ function init() {
   buildToolbar();
   buildPalette();
   buildAdjustGrid();
+  buildBrushPanel();
   bindColorUI();
   bindLayerUI();
   updateColorUI();
