@@ -2363,7 +2363,7 @@ document.addEventListener("keydown", e => {
   }
 
   const k = e.key.toLowerCase();
-  if (e.key === "Tab") { e.preventDefault(); toggleTabMode(); return; }
+  if (e.key === "Tab") { if ($("#modal-root").innerHTML.trim()) return; e.preventDefault(); toggleTabMode(); return; }
   if (k === "x") { [App.color, App.secondary] = [App.secondary, App.color]; updateColorUI(); return; }
   if (k === "d") { App.color = "#000000"; App.secondary = "#ffffff"; updateColorUI(); return; }
   if (k === "[") { App.brushSize = clamp(App.brushSize - 4, 1, 300); updateOptionsBar(); return; }
