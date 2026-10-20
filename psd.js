@@ -210,24 +210,33 @@ const PSD_BLEND_NAMES = (() => {
 
 function psdReader(buf) {
   if (!(buf instanceof Uint8Array)) buf = new Uint8Array(buf);
-  const dv = new DataView(buf.buffer, buf.byteOffset, buf.byteLength);
-  return {
-    dv, buf, _p: 0,
+  const byteLength = buf.byteLength;
+  const dv = new DataView(buf.buffer, buf.byteOffset, byteLength);
+  function need(n){
+    n = Math.max(0, n|0);
+    if (r._p + n > byteLength) throw new Error("File PSD terpotong atau rusak (outside of databound)");
+  }
+  const r = {
+    dv, buf, byteLength, _p: 0,
     get pos() { return this._p || 0; },
-    set pos(v) { this._p = v; },
-    u8() { const v = dv.getUint8(this._p); this._p += 1; return v; },
-    u16() { const v = dv.getUint16(this._p); this._p += 2; return v; },
-    i16() { const v = dv.getInt16(this._p); this._p += 2; return v; },
-    u32() { const v = dv.getUint32(this._p); this._p += 4; return v; },
-    i32() { const v = dv.getInt32(this._p); this._p += 4; return v; },
+    set pos(v) { this._p = Math.max(0, v|0); },
+    need,
+    u8() { need(1); const v = dv.getUint8(this._p); this._p += 1; return v; },
+    u16() { need(2); const v = dv.getUint16(this._p); this._p += 2; return v; },
+    i16() { need(2); const v = dv.getInt16(this._p); this._p += 2; return v; },
+    u32() { need(4); const v = dv.getUint32(this._p); this._p += 4; return v; },
+    i32() { need(4); const v = dv.getInt32(this._p); this._p += 4; return v; },
     str(n) {
+      n = Math.max(0, n|0);
+      need(n);
       let s = "";
       for (let i = 0; i < n; i++) s += String.fromCharCode(dv.getUint8(this._p + i));
       this._p += n;
       return s;
     },
-    skip(n) { this._p += n; },
+    skip(n) { n = Math.max(0, n|0); need(n); this._p += n; },
   };
+  return r;
 }
 function psdUnpackRow(src, n, rowLen) {
   const out = new Uint8Array(rowLen);
@@ -249,24 +258,33 @@ function psdParseChannel(r, comp, len, cw, ch, depth, target, channelCount) {
   const bpp = depth / 8;
   const rowLen = cw * bpp;
   const end = r.pos + Math.max(0, len - 2);
-  if (comp === 0) {
-    for (let y = 0; y < ch; y++) {
-      const row = new Uint8Array(rowLen);
-      for (let i = 0; i < rowLen; i++) row[i] = r.dv.getUint8(r.pos + y * rowLen + i);
-      for (let x = 0; x < cw; x++) target[y * cw + x] = row[x * bpp];
+  try {
+    if (comp === 0) {
+      if (r.pos + rowLen * ch > r.byteLength) throw new Error("outside");
+      for (let y = 0; y < ch; y++) {
+        for (let x = 0; x < cw; x++) {
+          target[y * cw + x] = r.dv.getUint8(r.pos + y * rowLen + x * bpp);
+        }
+      }
+      r.pos += rowLen * ch;
+    } else if (comp === 1) {
+      const counts = [];
+      for (let y = 0; y < ch; y++) { r.need(2); counts.push(r.dv.getUint16(r.pos)); r.pos += 2; }
+      for (let y = 0; y < ch; y++) {
+        const cRow = counts[y];
+        r.need(cRow);
+        const rowData = new Uint8Array(r.buf.buffer, r.buf.byteOffset + r.pos, cRow);
+        const row = psdUnpackRow(rowData, cRow, rowLen);
+        for (let x = 0; x < cw; x++) target[y * cw + x] = row[x * bpp];
+        r.pos += cRow;
+      }
     }
-  } else if (comp === 1) {
-    const counts = [];
-    let total = 0;
-    for (let y = 0; y < ch; y++) { const c = r.u16(); counts.push(c); total += c; }
-    let q = r.pos;
-    for (let y = 0; y < ch; y++) {
-      const row = psdUnpackRow(r.buf.subarray(q, q + counts[y]), counts[y], rowLen);
-      for (let x = 0; x < cw; x++) target[y * cw + x] = row[x * bpp];
-      q += counts[y];
-    }
+  } catch (e) {}
+  if (r.pos > end) r.pos = end;
+  if (r.pos < end && r.pos + 16 <= r.byteLength) {
+    // try small skip if still safe
   }
-  r.pos = end;
+  r.pos = Math.min(end, r.byteLength);
   return target;
 }
 function cmykToRgb(c,m,y,k){
