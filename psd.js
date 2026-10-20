@@ -564,45 +564,54 @@ function parsePSD(arrayBuffer) {
     const readLayout = (perChannel) => {
       const planes = [];
       let q = p0, ok = true;
-      const allCounts = [];
-      if (!perChannel) {
-        for (let i = 0; i < nCh * h; i++) allCounts.push(r.dv.getUint16(q + i * 2));
-        q += nCh * h * 2;
-        for (let c = 0; c < nCh; c++) {
-          const plane = new Uint8Array(w * h);
-          for (let y = 0; y < h; y++) {
-            const cnt = allCounts[c * h + y];
-            const row = psdUnpackRow(r.buf.subarray(q, q + cnt), cnt, rowLen);
-            for (let x = 0; x < w; x++) plane[y * w + x] = row[x * depth / 8];
-            q += cnt;
+      try {
+        if (!perChannel) {
+          if (q + nCh * h * 2 > r.byteLength) { ok = false; return { planes: [], ok: false, end: q }; }
+          const allCounts = [];
+          for (let i = 0; i < nCh * h; i++) { if (q + 2 > r.byteLength) break; allCounts.push(r.dv.getUint16(q + i * 2)); }
+          q += nCh * h * 2;
+          for (let c = 0; c < nCh; c++) {
+            const plane = new Uint8Array(w * h);
+            for (let y = 0; y < h; y++) {
+              const cnt = allCounts[c * h + y] || 0;
+              if (q + cnt > r.byteLength) { ok = false; break; }
+              const row = psdUnpackRow(new Uint8Array(r.buf.buffer, r.buf.byteOffset + q, cnt), cnt, rowLen);
+              for (let x = 0; x < w; x++) plane[y * w + x] = row[x * bppC];
+              q += cnt;
+            }
+            planes.push(plane);
           }
-          planes.push(plane);
-        }
-      } else {
-        for (let c = 0; c < nCh; c++) {
-          const counts = [];
-          for (let y = 0; y < h; y++) counts.push(r.dv.getUint16(q + y * 2));
-          q += h * 2;
-          const plane = new Uint8Array(w * h);
-          for (let y = 0; y < h; y++) {
-            const cnt = counts[y];
-            const row = psdUnpackRow(r.buf.subarray(q, q + cnt), cnt, rowLen);
-            for (let x = 0; x < w; x++) plane[y * w + x] = row[x * depth / 8];
-            q += cnt;
+        } else {
+          for (let c = 0; c < nCh; c++) {
+            if (q + h * 2 > r.byteLength) { ok = false; break; }
+            const counts = [];
+            for (let y = 0; y < h; y++) { if (q + 2 > r.byteLength) break; counts.push(r.dv.getUint16(q + y * 2)); }
+            q += h * 2;
+            const plane = new Uint8Array(w * h);
+            for (let y = 0; y < h; y++) {
+              const cnt = counts[y] || 0;
+              if (q + cnt > r.byteLength) { ok = false; break; }
+              const row = psdUnpackRow(new Uint8Array(r.buf.buffer, r.buf.byteOffset + q, cnt), cnt, rowLen);
+              for (let x = 0; x < w; x++) plane[y * w + x] = row[x * bppC];
+              q += cnt;
+            }
+            planes.push(plane);
           }
-          planes.push(plane);
         }
-      }
+      } catch(e) { ok = false; }
       if (q > r.buf.byteLength) ok = false;
       return { planes, ok, end: q };
     };
-    let res = readLayout(true);
-    if (!res.ok || res.end > r.buf.byteLength + 1024) {
-      const spec = readLayout(false);
-      if (spec.ok) res = spec;
-      else res = { planes: res.planes, ok: true, end: res.end };
-    }
-    res.planes.forEach(p => compPlanes.push(p));
+    try {
+      let res = readLayout(true);
+      if (!res.ok || res.end > r.byteLength + 1024) {
+        try {
+          const spec = readLayout(false);
+          if (spec.ok) res = spec;
+        } catch(e) {}
+      }
+      res.planes.forEach(p => compPlanes.push(p));
+    } catch(e) {}
   } else {
     console.warn("Kompresi PSD", comp, "tidak didukung (fallback baca kasar) — coba terus");
     const compPlanesArr = [];
