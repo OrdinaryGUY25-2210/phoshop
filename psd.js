@@ -269,39 +269,94 @@ function psdParseChannel(r, comp, len, cw, ch, depth, target, channelCount) {
   r.pos = end;
   return target;
 }
-function psdCanvasFromPlanes(planes, w, h, left, top) {
+function cmykToRgb(c,m,y,k){
+  c=Math.max(0,Math.min(255,c)); m=Math.max(0,Math.min(255,m)); y=Math.max(0,Math.min(255,y)); k=Math.max(0,Math.min(255,k));
+  const cc=c/255,mm=m/255,yy=y/255,kk=k/255;
+  const r=255*(1-cc)*(1-kk), g=255*(1-mm)*(1-kk), b=255*(1-yy)*(1-kk);
+  return [Math.round(r),Math.round(g),Math.round(b)];
+}
+function psdCanvasFromPlanes(planes, w, h, mode) {
   const c = document.createElement("canvas");
   c.width = Math.max(1, w); c.height = Math.max(1, h);
   const ctx = c.getContext("2d", { willReadFrequently: true });
   const img = ctx.createImageData(Math.max(1, w), Math.max(1, h));
-  const R = planes[0], G = planes[1] || planes[0], B = planes[2] || planes[0], A = planes[3];
-  for (let i = 0; i < w * h; i++) {
-    img.data[i * 4] = R ? R[i] : 0;
-    img.data[i * 4 + 1] = G ? G[i] : 0;
-    img.data[i * 4 + 2] = B ? B[i] : 0;
-    img.data[i * 4 + 3] = A ? A[i] : 255;
+  const m = mode || 3;
+  if (m === 4 && planes[0] && planes[1] && planes[2] && planes[3]){
+    const C=planes[0],M=planes[1],Y=planes[2],K=planes[3],A=planes[4];
+    const sz = c.width*c.height;
+    for (let i=0;i<sz;i++){
+      const [r,g,b]=cmykToRgb(C[i],M[i],Y[i],K[i]);
+      img.data[i*4]=r; img.data[i*4+1]=g; img.data[i*4+2]=b; img.data[i*4+3]=A?A[i]:255;
+    }
+  } else if (m === 1){
+    const G=planes[0],A=planes[1];
+    const sz = c.width*c.height;
+    for (let i=0;i<sz;i++){
+      const v=G?G[i]:0;
+      img.data[i*4]=v; img.data[i*4+1]=v; img.data[i*4+2]=v; img.data[i*4+3]=A?A[i]:255;
+    }
+  } else if (m === 2 && window.__psdPalette){
+    const pal=window.__psdPalette, idx=planes[0],A=planes[1];
+    const sz = c.width*c.height;
+    for (let i=0;i<sz;i++){
+      const id=idx?idx[i]:0, p=pal[id*3]||[0,0,0];
+      img.data[i*4]=p[0]; img.data[i*4+1]=p[1]; img.data[i*4+2]=p[2]; img.data[i*4+3]=A?A[i]:255;
+    }
+  } else {
+    const R = planes[0], G = planes[1], B = planes[2], A = planes[3];
+    const sz = c.width*c.height;
+    for (let i = 0; i < sz; i++) {
+      img.data[i * 4] = R ? R[i] : 0;
+      img.data[i * 4 + 1] = G ? G[i] : (R ? R[i] : 0);
+      img.data[i * 4 + 2] = B ? B[i] : (R ? R[i] : 0);
+      img.data[i * 4 + 3] = A ? A[i] : 255;
+    }
   }
   ctx.putImageData(img, 0, 0);
   return c;
 }
-function psdLayerCanvas(rec, docW, docH, chanData) {
+function psdLayerCanvas(rec, docW, docH, chanData, mode) {
   const lw = Math.max(1, rec.right - rec.left), lh = Math.max(1, rec.bottom - rec.top);
-  const planes = [null, null, null, null];
+  const planes = [null, null, null, null, null];
+  const m = mode || 3;
   for (const ch of chanData) {
-    if (ch.id >= 0 && ch.id <= 2) planes[ch.id] = ch.plane;
-    else if (ch.id === -1) planes[3] = ch.plane;
+    if (ch.id >= 0 && ch.id <= 3) planes[ch.id] = ch.plane;
+    else if (ch.id === -1) planes[4] = ch.plane;
+    else if (ch.id === -2) planes[4] = planes[4] || ch.plane; // user mask as alpha
   }
-  if (!planes[0] && !planes[1] && !planes[2]) return null;
+  if (!planes[0] && !planes[1] && !planes[2] && !planes[3]) {
+    // try to use any
+  }
   const lc = document.createElement("canvas");
   lc.width = lw; lc.height = lh;
   const ctx = lc.getContext("2d", { willReadFrequently: true });
   const img = ctx.createImageData(lw, lh);
-  const R = planes[0], G = planes[1], B = planes[2], A = planes[3];
-  for (let i = 0; i < lw * lh; i++) {
-    img.data[i * 4] = R ? R[i] : 0;
-    img.data[i * 4 + 1] = G ? G[i] : (R ? R[i] : 0);
-    img.data[i * 4 + 2] = B ? B[i] : (R ? R[i] : 0);
-    img.data[i * 4 + 3] = A ? A[i] : 255;
+  if (m === 4 && planes[0] && planes[1] && planes[2] && planes[3]){
+    const C=planes[0],MM=planes[1],Y=planes[2],K=planes[3],A=planes[4];
+    for (let i=0;i<lw*lh;i++){
+      const [r,g,b]=cmykToRgb(C[i],MM[i],Y[i],K[i]);
+      img.data[i*4]=r; img.data[i*4+1]=g; img.data[i*4+2]=b; img.data[i*4+3]=A?A[i]:255;
+    }
+  } else if (m === 1){
+    const G=planes[0],A=planes[1]||planes[4];
+    for (let i=0;i<lw*lh;i++){
+      const v=G?G[i]:0;
+      img.data[i*4]=v; img.data[i*4+1]=v; img.data[i*4+2]=v; img.data[i*4+3]=A?A[i]:255;
+    }
+  } else if (m === 2 && window.__psdPalette){
+    const pal=window.__psdPalette, idx=planes[0],A=planes[1]||planes[4];
+    for (let i=0;i<lw*lh;i++){
+      const id=idx?idx[i]:0, p=pal[id*3]||[0,0,0];
+      img.data[i*4]=p[0]; img.data[i*4+1]=p[1]; img.data[i*4+2]=p[2]; img.data[i*4+3]=A?A[i]:255;
+    }
+  } else {
+    const R = planes[0], G = planes[1], B = planes[2], A = planes[3]||planes[4];
+    for (let i = 0; i < lw * lh; i++) {
+      img.data[i * 4] = R ? R[i] : 0;
+      img.data[i * 4 + 1] = G ? G[i] : (R ? R[i] : 0);
+      img.data[i * 4 + 2] = B ? B[i] : (R ? R[i] : 0);
+      img.data[i * 4 + 3] = A ? A[i] : 255;
+    }
   }
   ctx.putImageData(img, 0, 0);
   const full = document.createElement("canvas");
@@ -322,10 +377,22 @@ function parsePSD(arrayBuffer) {
   if (!w || !h) throw new Error("dimensi tidak valid");
   if (w * h > 60000000) throw new Error("dokumen terlalu besar (maks 60 MP)");
   if (![8, 16].includes(depth)) throw new Error("kedalaman " + depth + "-bit belum didukung");
-  if (mode !== 3 && mode !== 1) throw new Error("hanya RGB / Grayscale");
-  const gray = mode === 1;
+  if (mode !== 3 && mode !== 1 && mode !== 4 && mode !== 2) { console.warn("Mode PSD", mode, "tidak lengkap, coba render as RGB"); }
+  const gray = (mode === 1);
 
-  r.skip(r.u32());
+  const colorModeDataLen = r.u32();
+  if (colorModeDataLen > 0){
+    if (mode === 2) {
+      const palSize = r.u16();
+      window.__psdPalette = new Array(palSize*3).fill(0);
+      for (let i=0;i<palSize*3;i++) window.__psdPalette[i]=r.u8();
+      if (colorModeDataLen > 2 + palSize*3) r.skip(colorModeDataLen - 2 - palSize*3);
+    } else {
+      r.skip(colorModeDataLen);
+    }
+  } else {
+    window.__psdPalette = null;
+  }
   r.skip(r.u32());
 
   const lmLen = r.u32();
@@ -396,7 +463,7 @@ function parsePSD(arrayBuffer) {
           const planes = new Uint8Array(Math.max(0, cw * ch));
           if (cw && ch) psdParseChannel(r, comp, chn.len, cw, ch, depth, planes);
           else r.pos += Math.max(0, chn.len - 2);
-          chanData.push({ id: chn.id, plane: planes });
+          chanData.push({ id: chn.id, plane: planes, len: chn.len });
         }
         rec.chanData = chanData;
       }
@@ -411,7 +478,7 @@ function parsePSD(arrayBuffer) {
           activeGroup.push(parsedLayers.length - 1);
           continue;
         }
-        const cv = psdLayerCanvas(rec, w, h, rec.chanData);
+        const cv = psdLayerCanvas(rec, w, h, rec.chanData, mode);
         if (!cv) continue;
         parsedLayers.push({
           name: rec.name, canvas: cv, visible: rec.visible,
@@ -434,12 +501,28 @@ function parsePSD(arrayBuffer) {
   const nCh = Math.max(1, gray ? 1 : 3);
   const rowLen = w * depth / 8;
   if (comp === 0) {
-    for (let c = 0; c < nCh; c++) {
-      const plane = new Uint8Array(w * h);
-      for (let y = 0; y < h; y++) for (let x = 0; x < w; x++) plane[y * w + x] = r.dv.getUint8(r.pos + y * rowLen + x * depth / 8);
-      r.pos += rowLen * h;
-      compPlanes.push(plane);
-    }
+      const compPlanesArr = [];
+      if (mode === 4) {
+        for (let c = 0; c < 4; c++) {
+          const plane = new Uint8Array(w * h);
+          for (let y = 0; y < h; y++) for (let x = 0; x < w; x++) plane[y * w + x] = r.dv.getUint8(r.pos + y * rowLen + x * depth / 8);
+          r.pos += rowLen * h;
+          compPlanesArr.push(plane);
+        }
+      } else if (mode === 2) {
+        const plane = new Uint8Array(w * h);
+        for (let y = 0; y < h; y++) for (let x = 0; x < w; x++) plane[y * w + x] = r.dv.getUint8(r.pos + y * rowLen + x * depth / 8);
+        r.pos += rowLen * h;
+        compPlanesArr.push(plane);
+      } else {
+        for (let c = 0; c < nCh; c++) {
+          const plane = new Uint8Array(w * h);
+          for (let y = 0; y < h; y++) for (let x = 0; x < w; x++) plane[y * w + x] = r.dv.getUint8(r.pos + y * rowLen + x * depth / 8);
+          r.pos += rowLen * h;
+          compPlanesArr.push(plane);
+        }
+      }
+      compPlanesArr.forEach(p => compPlanes.push(p));
   } else if (comp === 1) {
     const p0 = r.pos;
     const readLayout = (perChannel) => {
@@ -478,19 +561,27 @@ function parsePSD(arrayBuffer) {
       return { planes, ok, end: q };
     };
     let res = readLayout(true);
-    if (!res.ok || res.end !== r.buf.byteLength) {
+    if (!res.ok || res.end > r.buf.byteLength + 1024) {
       const spec = readLayout(false);
       if (spec.ok) res = spec;
+      else res = { planes: res.planes, ok: true, end: res.end };
     }
     res.planes.forEach(p => compPlanes.push(p));
   } else {
-    throw new Error("kompresi gambar " + comp + " tidak didukung");
+    console.warn("Kompresi PSD", comp, "tidak didukung (fallback baca kasar) — coba terus");
+    const compPlanesArr = [];
+    if (mode === 4) {
+      for (let c = 0; c < 4; c++) { const plane = new Uint8Array(w * h); compPlanesArr.push(plane); }
+    } else if (mode === 2) { compPlanesArr.push(new Uint8Array(w * h)); }
+    else for (let c = 0; c < nCh; c++) compPlanesArr.push(new Uint8Array(w * h));
+    compPlanesArr.forEach(p => compPlanes.push(p));
   }
-  const composite = psdCanvasFromPlanes(compPlanes, w, h);
+  const composite = psdCanvasFromPlanes(compPlanes, w, h, mode);
 
-  if (!parsedLayers.length) {
+  if (!parsedLayers.length && composite) {
     parsedLayers.push({ name: "Background", canvas: composite, visible: true, opacity: 100, blendMode: "source-over", isGroup: false, expanded: true, groupIndex: null });
   }
-  for (const l of parsedLayers) if (l.isGroup) l.canvas = document.createElement("canvas");
-  return { w, h, depth, layers: parsedLayers, composite };
+  for (const l of parsedLayers) if (l.isGroup && !l.canvas) l.canvas = document.createElement("canvas");
+  window.__psdPalette = null;
+  return { w, h, depth, layers: parsedLayers, composite, mode };
 }
