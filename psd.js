@@ -208,32 +208,35 @@ const PSD_BLEND_NAMES = (() => {
   return m;
 })();
 
-function psdReader(buf) {
+function psdReader(buf, big) {
   if (!(buf instanceof Uint8Array)) buf = new Uint8Array(buf);
   const byteLength = buf.byteLength;
   const dv = new DataView(buf.buffer, buf.byteOffset, byteLength);
   const r = {
-    dv, buf, byteLength, _p: 0,
+    dv, buf, byteLength, big: !!big, _p: 0,
     get pos() { return this._p || 0; },
-    set pos(v) { this._p = Math.max(0, v|0); },
-    need(n){
-      n = Math.max(0, n|0);
-      if (r._p + n > r.byteLength) throw new Error("File PSD terpotong atau rusak (outside of databound)");
+    set pos(v) { v = Math.floor(Number(v)); this._p = v > 0 ? v : 0; },
+    need(n) {
+      n = Math.max(0, Math.floor(Number(n) || 0));
+      if (r._p + n > r.byteLength) throw new Error("File PSD terpotong atau rusak (data melewati ukuran file)");
     },
     u8() { this.need(1); const v = dv.getUint8(this._p); this._p += 1; return v; },
     u16() { this.need(2); const v = dv.getUint16(this._p); this._p += 2; return v; },
     i16() { this.need(2); const v = dv.getInt16(this._p); this._p += 2; return v; },
     u32() { this.need(4); const v = dv.getUint32(this._p); this._p += 4; return v; },
     i32() { this.need(4); const v = dv.getInt32(this._p); this._p += 4; return v; },
+    u64() { this.need(8); const hi = dv.getUint32(this._p), lo = dv.getUint32(this._p + 4); this._p += 8; return hi * 4294967296 + lo; },
+    /* panjang field: 4 byte untuk PSD, 8 byte untuk PSB */
+    len() { return this.big ? this.u64() : this.u32(); },
     str(n) {
-      n = Math.max(0, n|0);
+      n = Math.max(0, Math.floor(Number(n) || 0));
       this.need(n);
       let s = "";
-      for (let i = 0; i < n; i++) s += String.fromCharCode(dv.getUint8(this._p + i));
+      for (let i = 0; i < n; i++) s += String.fromCharCode(buf[this._p + i]);
       this._p += n;
       return s;
     },
-    skip(n) { n = Math.max(0, n|0); this.need(n); this._p += n; },
+    skip(n) { n = Math.max(0, Math.floor(Number(n) || 0)); this.need(n); this._p += n; },
   };
   return r;
 }
@@ -252,38 +255,38 @@ function psdUnpackRow(src, n, rowLen) {
   }
   return out;
 }
-function psdParseChannel(r, comp, len, cw, ch, depth, target, channelCount) {
-  /* target = array of Uint8Array planes */
-  const bpp = depth / 8;
+/* Baca satu channel (planar 8-bit hasil downsample dari 8/16/32-bit). Melempar error bila rusak;
+   pemanggil yang menentukan posisi akhir, jadi kerusakan satu channel tidak menggeser channel lain. */
+function psdParseChannel(r, comp, len, cw, ch, depth, target, big) {
+  const bpp = Math.max(1, depth >> 3);
   const rowLen = cw * bpp;
-  const end = r.pos + Math.max(0, len - 2);
-  try {
-    if (comp === 0) {
-      if (r.pos + rowLen * ch > r.byteLength) throw new Error("outside");
-      for (let y = 0; y < ch; y++) {
-        for (let x = 0; x < cw; x++) {
-          target[y * cw + x] = r.dv.getUint8(r.pos + y * rowLen + x * bpp);
-        }
-      }
-      r.pos += rowLen * ch;
-    } else if (comp === 1) {
-      const counts = [];
-      for (let y = 0; y < ch; y++) { r.need(2); counts.push(r.dv.getUint16(r.pos)); r.pos += 2; }
-      for (let y = 0; y < ch; y++) {
-        const cRow = counts[y];
-        r.need(cRow);
-        const rowData = new Uint8Array(r.buf.buffer, r.buf.byteOffset + r.pos, cRow);
-        const row = psdUnpackRow(rowData, cRow, rowLen);
-        for (let x = 0; x < cw; x++) target[y * cw + x] = row[x * bpp];
-        r.pos += cRow;
-      }
+  const buf = r.buf;
+  const start = r.pos;
+  const limit = Math.min(r.byteLength, start + Math.max(0, len - 2));
+  if (comp === 0) {
+    for (let y = 0; y < ch; y++) {
+      const base = start + y * rowLen;
+      if (base + rowLen > limit) break;
+      const o = y * cw;
+      if (bpp === 1) target.set(buf.subarray(base, base + cw), o);
+      else for (let x = 0; x < cw; x++) target[o + x] = buf[base + x * bpp];
     }
-  } catch (e) {}
-  if (r.pos > end) r.pos = end;
-  if (r.pos < end && r.pos + 16 <= r.byteLength) {
-    // try small skip if still safe
+  } else if (comp === 1) {
+    const cs = big ? 4 : 2;
+    if (start + ch * cs > limit) throw new Error("tabel RLE terpotong");
+    let q = start + ch * cs;
+    for (let y = 0; y < ch; y++) {
+      const cRow = big ? r.dv.getUint32(start + y * 4) : r.dv.getUint16(start + y * 2);
+      if (q + cRow > limit) break;
+      const row = psdUnpackRow(buf.subarray(q, q + cRow), cRow, rowLen);
+      const o = y * cw;
+      if (bpp === 1) target.set(row.subarray(0, cw), o);
+      else for (let x = 0; x < cw; x++) target[o + x] = row[x * bpp];
+      q += cRow;
+    }
+  } else {
+    console.warn("Kompresi channel", comp, "(ZIP) belum didukung, channel dikosongkan");
   }
-  r.pos = Math.min(end, r.byteLength);
   return target;
 }
 function cmykToRgb(c,m,y,k){
@@ -316,8 +319,8 @@ function psdCanvasFromPlanes(planes, w, h, mode) {
     const pal=window.__psdPalette, idx=planes[0],A=planes[1];
     const sz = c.width*c.height;
     for (let i=0;i<sz;i++){
-      const id=idx?idx[i]:0, p=pal[id*3]||[0,0,0];
-      img.data[i*4]=p[0]; img.data[i*4+1]=p[1]; img.data[i*4+2]=p[2]; img.data[i*4+3]=A?A[i]:255;
+      const id=idx?idx[i]:0;
+      img.data[i*4]=pal[id]||0; img.data[i*4+1]=pal[256+id]||0; img.data[i*4+2]=pal[512+id]||0; img.data[i*4+3]=A?A[i]:255;
     }
   } else {
     const R = planes[0], G = planes[1], B = planes[2], A = planes[3];
@@ -334,6 +337,7 @@ function psdCanvasFromPlanes(planes, w, h, mode) {
 }
 function psdLayerCanvas(rec, docW, docH, chanData, mode) {
   const lw = Math.max(1, rec.right - rec.left), lh = Math.max(1, rec.bottom - rec.top);
+  if (lw * lh > 400000000) return null;
   const planes = [null, null, null, null, null];
   const m = mode || 3;
   for (const ch of chanData) {
@@ -363,8 +367,8 @@ function psdLayerCanvas(rec, docW, docH, chanData, mode) {
   } else if (m === 2 && window.__psdPalette){
     const pal=window.__psdPalette, idx=planes[0],A=planes[1]||planes[4];
     for (let i=0;i<lw*lh;i++){
-      const id=idx?idx[i]:0, p=pal[id*3]||[0,0,0];
-      img.data[i*4]=p[0]; img.data[i*4+1]=p[1]; img.data[i*4+2]=p[2]; img.data[i*4+3]=A?A[i]:255;
+      const id=idx?idx[i]:0;
+      img.data[i*4]=pal[id]||0; img.data[i*4+1]=pal[256+id]||0; img.data[i*4+2]=pal[512+id]||0; img.data[i*4+3]=A?A[i]:255;
     }
   } else {
     const R = planes[0], G = planes[1], B = planes[2], A = planes[3]||planes[4];
@@ -376,257 +380,243 @@ function psdLayerCanvas(rec, docW, docH, chanData, mode) {
     }
   }
   ctx.putImageData(img, 0, 0);
-  const full = document.createElement("canvas");
-  full.width = docW; full.height = docH;
-  full.getContext("2d").drawImage(lc, rec.left, rec.top);
-  return full;
+  /* kembalikan canvas seukuran layer saja; posisi (left/top) dipakai pemanggil saat menggambar */
+  return lc;
 }
+/* kunci additional-info yang memakai panjang 8 byte di PSB */
+const PSB_LONG_KEYS = new Set(["LMsk","Lr16","Lr32","Layr","Mt16","Mt32","Mtrn","Alph","FMsk","lnk2","FEid","FXid","PxSD","cinf"]);
+
+function psdParseLayerInfo(r, depth, mode, docW, docH, end) {
+  let count = Math.abs(r.i16());
+  const recs = [];
+  for (let i = 0; i < count; i++) {
+    const rec = {
+      top: r.i32(), left: r.i32(), bottom: r.i32(), right: r.i32(),
+      channels: [], name: "Lapisan " + (i + 1), opacity: 255, visible: true,
+      blend: "source-over", isGroup: false, skipLayer: false,
+    };
+    const nc = r.u16();
+    if (nc > 56) throw new Error("jumlah channel layer tidak valid");
+    for (let c = 0; c < nc; c++) rec.channels.push({ id: r.i16(), len: r.len() });
+    r.str(4);
+    const key = r.str(4);
+    rec.blend = PSD_BLEND_NAMES[key] || "source-over";
+    rec.opacity = r.u8();
+    r.u8();
+    const flags = r.u8();
+    rec.visible = !(flags & 2);
+    r.u8();
+    const extraLen = r.u32();
+    const extraEnd = r.pos + extraLen;
+    const maskLen = r.u32(); r.skip(maskLen);
+    const rangeLen = r.u32(); r.skip(rangeLen);
+    const nameLen = r.u8();
+    let nm = r.str(nameLen);
+    r.skip((4 - ((nameLen + 1) % 4)) % 4);
+    while (r.pos + 12 <= extraEnd) {
+      const sig = r.str(4);
+      if (sig !== "8BIM" && sig !== "8B64") break;
+      const k = r.str(4);
+      const kl = (r.big && PSB_LONG_KEYS.has(k)) ? r.u64() : r.u32();
+      const kend = r.pos + kl;
+      if (k === "lsct" && kl >= 4) {
+        const t = r.u32();
+        if (t === 1 || t === 2) { rec.isGroup = true; rec.expanded = t === 1; }
+        else if (t === 3) rec.skipLayer = true;
+      } else if (k === "luni" && kl > 4) {
+        const n = r.u32();
+        let s = "";
+        for (let j = 0; j < n && r.pos + 2 <= kend; j++) s += String.fromCharCode(r.u16());
+        if (s.trim()) nm = s;
+      }
+      r.pos = kend;
+      if (r.pos > extraEnd) break;
+    }
+    r.pos = extraEnd;
+    rec.name = nm || rec.name;
+    recs.push(rec);
+  }
+  /* data channel per layer: posisi tiap channel ditentukan dari panjangnya, bukan dari hasil parsing */
+  let truncated = false;
+  for (const rec of recs) {
+    const cw = Math.max(0, rec.right - rec.left), ch = Math.max(0, rec.bottom - rec.top);
+    const tooBig = cw * ch > 400000000;
+    const chanData = [];
+    for (const chn of rec.channels) {
+      const chStart = r.pos;
+      const plane = new Uint8Array(cw && ch && !tooBig ? cw * ch : 0);
+      if (truncated || chStart + chn.len > r.byteLength) {
+        truncated = true;           // file terpotong: sisanya dibiarkan kosong
+      } else if (plane.length && chn.len >= 2) {
+        try {
+          const comp = r.u16();
+          psdParseChannel(r, comp, chn.len, cw, ch, depth, plane, r.big);
+        } catch (e) { console.warn("channel layer rusak:", rec.name, e.message); }
+      }
+      if (!truncated) r.pos = chStart + chn.len;
+      chanData.push({ id: chn.id, plane, len: chn.len });
+    }
+    rec.chanData = chanData;
+    if (truncated) { /* tetap lanjutkan membangun layer yang sudah terbaca */ }
+  }
+  return recs;
+}
+
+function psdBuildLayers(recs, w, h, mode) {
+  const parsedLayers = [];
+  const activeGroup = [];
+  for (const rec of recs) {
+    if (rec.skipLayer) { activeGroup.pop(); continue; }
+    if (rec.isGroup) {
+      parsedLayers.push({ id: null, name: rec.name, isGroup: true, expanded: rec.expanded !== false, visible: rec.visible, opacity: Math.round(rec.opacity / 2.55), blendMode: "source-over", group: activeGroup.length ? activeGroup[activeGroup.length - 1] : null, canvas: null });
+      activeGroup.push(parsedLayers.length - 1);
+      continue;
+    }
+    const cv = psdLayerCanvas(rec, w, h, rec.chanData, mode);
+    if (!cv) continue;
+    parsedLayers.push({
+      name: rec.name, canvas: cv, offX: rec.left, offY: rec.top, visible: rec.visible,
+      opacity: Math.round(rec.opacity / 2.55), blendMode: rec.blend,
+      isGroup: false, expanded: true,
+      groupIndex: activeGroup.length ? activeGroup[activeGroup.length - 1] : null,
+    });
+    rec.chanData = null;            // lepas memori secepatnya
+  }
+  return parsedLayers;
+}
+
+function psdReadComposite(r, w, h, channels, nCh, depth, big) {
+  const planes = [];
+  const bpp = Math.max(1, depth >> 3);
+  const rowLen = w * bpp;
+  let comp = 0;
+  try { comp = r.u16(); } catch (e) { return planes; }
+  const buf = r.buf;
+  const total = Math.max(channels, nCh);
+  if (comp === 0) {
+    let q = r.pos;
+    for (let c = 0; c < nCh; c++) {
+      const plane = new Uint8Array(w * h);
+      for (let y = 0; y < h; y++) {
+        const base = q + y * rowLen;
+        if (base + rowLen > r.byteLength) break;
+        const o = y * w;
+        if (bpp === 1) plane.set(buf.subarray(base, base + w), o);
+        else for (let x = 0; x < w; x++) plane[o + x] = buf[base + x * bpp];
+      }
+      planes.push(plane);
+      q += rowLen * h;
+    }
+  } else if (comp === 1) {
+    /* spesifikasi: tabel panjang baris untuk SEMUA channel dulu, baru datanya */
+    const cs = big ? 4 : 2;
+    let tbl = r.pos;
+    let q = tbl + total * h * cs;
+    if (q > r.byteLength) return planes;
+    for (let c = 0; c < nCh; c++) {
+      const plane = new Uint8Array(w * h);
+      let stop = false;
+      for (let y = 0; y < h; y++) {
+        const idx = tbl + (c * h + y) * cs;
+        const cnt = big ? r.dv.getUint32(idx) : r.dv.getUint16(idx);
+        if (q + cnt > r.byteLength) { stop = true; break; }
+        const row = psdUnpackRow(buf.subarray(q, q + cnt), cnt, rowLen);
+        const o = y * w;
+        if (bpp === 1) plane.set(row.subarray(0, w), o);
+        else for (let x = 0; x < w; x++) plane[o + x] = row[x * bpp];
+        q += cnt;
+      }
+      planes.push(plane);
+      if (stop) break;
+    }
+  } else {
+    console.warn("Kompresi komposit", comp, "tidak didukung");
+  }
+  return planes;
+}
+
 function parsePSD(arrayBuffer) {
-  let r;
-  try { r = psdReader(arrayBuffer); } catch(e) { throw e; }
+  let r = psdReader(arrayBuffer, false);
   if (r.str(4) !== "8BPS") throw new Error("bukan file PSD");
   const version = r.u16();
   if (version !== 1 && version !== 2) throw new Error("versi PSD tidak didukung");
+  const big = version === 2;                      // PSB (Large Document)
+  r.big = big;
   r.skip(6);
   const channels = r.u16();
   const h = r.u32(), w = r.u32();
   const depth = r.u16();
   const mode = r.u16();
   if (!w || !h) throw new Error("dimensi tidak valid");
-  if (w * h > 80000000) throw new Error("dokumen terlalu besar");
-  if (![8, 16, 1].includes(depth)) {
-    // try to proceed anyway
-  }
-  if (mode !== 3 && mode !== 1 && mode !== 4 && mode !== 2 && mode !== 9 && mode !== 8 && mode !== 7 && mode !== 6) { console.warn("Mode PSD", mode, "tidak lengkap, coba render"); }
+  if (w * h > 400000000) throw new Error("dokumen terlalu besar (" + w + "×" + h + ")");
   const gray = (mode === 1);
 
+  /* color mode data (palet untuk Indexed: 768 byte, planar R/G/B) */
   const colorModeDataLen = r.u32();
-  if (colorModeDataLen > 0){
-    if (mode === 2) {
-      const palSize = r.u16();
-      window.__psdPalette = new Array(palSize*3).fill(0);
-      for (let i=0;i<palSize*3;i++) window.__psdPalette[i]=r.u8();
-      if (colorModeDataLen > 2 + palSize*3) r.skip(colorModeDataLen - 2 - palSize*3);
-    } else {
-      r.skip(colorModeDataLen);
-    }
-  } else {
-    window.__psdPalette = null;
+  window.__psdPalette = null;
+  if (colorModeDataLen > 0) {
+    if (mode === 2 && colorModeDataLen >= 768) {
+      const pal = new Array(768);
+      for (let i = 0; i < 768; i++) pal[i] = r.u8();
+      window.__psdPalette = pal;
+      r.skip(colorModeDataLen - 768);
+    } else r.skip(colorModeDataLen);
   }
-  try {   try { r.skip(r.u32()); } catch(e) {} } catch(e) {}
+  /* image resources */
+  r.skip(r.u32());
 
-  let lmLen = 0, lmStart = r.pos;
-  try { lmLen = r.u32(); lmStart = r.pos; } catch(e) { lmLen = 0; lmStart = r.pos; }
-  const layers = [];
+  /* layer & mask info */
+  let lmLen = 0;
+  try { lmLen = r.len(); } catch (e) { lmLen = 0; }
+  const lmStart = r.pos;
+  const lmEnd = Math.min(lmStart + lmLen, r.byteLength);
   let parsedLayers = [];
   try {
-    if (lmLen > 8) {
-      const lmEnd = lmStart + lmLen;
-      const layerInfoLen = r.u32();
+    if (lmLen > 0) {
+      const layerInfoLen = r.len();
       const liEnd = r.pos + layerInfoLen;
-      let count = r.i16();
-      count = Math.abs(count);
-      const recs = [];
-      for (let i = 0; i < count; i++) {
-        const rec = {
-          top: r.i32(), left: r.i32(), bottom: r.i32(), right: r.i32(),
-          channels: [], name: "Lapisan " + (i + 1), opacity: 255, visible: true,
-          blend: "source-over", isGroup: false, skipLayer: false,
-        };
-        const nc = r.u16();
-        for (let c = 0; c < nc; c++) rec.channels.push({ id: r.i16(), len: r.u32() });
-        r.str(4);
-        const key = r.str(4);
-        rec.blend = PSD_BLEND_NAMES[key] || "source-over";
-        rec.opacity = r.u8();
-        r.u8();
-        const flags = r.u8();
-        rec.visible = !(flags & 2);
-        r.u8();
-        const extraLen = r.u32();
-        const extraEnd = r.pos + extraLen;
-        const maskLen = r.u32(); r.skip(maskLen);
-        const rangeLen = r.u32(); r.skip(rangeLen);
-        const nameLen = r.u8();
-        let nm = r.str(nameLen);
-        const pad = (4 - ((nameLen + 1) % 4)) % 4;
-        r.skip(pad);
-        while (r.pos + 12 <= extraEnd) {
+      let recs = null;
+      if (layerInfoLen > 2) {
+        recs = psdParseLayerInfo(r, depth, mode, w, h, liEnd);
+        r.pos = liEnd;
+      } else {
+        /* PSD 16/32-bit: layer disimpan di blok tambahan Lr16 / Lr32 / Layr */
+        r.pos = liEnd;
+        const gmLen = r.u32(); r.skip(gmLen);
+        while (r.pos + 12 <= lmEnd) {
           const sig = r.str(4);
           if (sig !== "8BIM" && sig !== "8B64") break;
-          const k = r.str(4);
-          const kl = r.u32();
-          const kend = r.pos + kl;
-          if (k === "lsct" && kl >= 4) {
-            const t = r.u32();
-            if (t === 1 || t === 2) { rec.isGroup = true; rec.expanded = t === 1; }
-            else if (t === 3) rec.skipLayer = true;
-          } else if (k === "luni" && kl > 4) {
-            const n = r.u32();
-            let s = "";
-            for (let j = 0; j < n; j++) s += String.fromCharCode(r.u16());
-            if (s.trim()) nm = s;
+          const key = r.str(4);
+          const kl = (big && PSB_LONG_KEYS.has(key)) ? r.u64() : r.u32();
+          const kStart = r.pos;
+          if (key === "Lr16" || key === "Lr32" || key === "Layr") {
+            recs = psdParseLayerInfo(r, depth, mode, w, h, kStart + kl);
+            break;
           }
-          r.pos = kend;
-          if (r.pos > extraEnd) break;
+          r.pos = kStart + kl + ((4 - (kl % 4)) % 4);
         }
-        r.pos = extraEnd;
-        rec.name = nm || rec.name;
-        recs.push(rec);
       }
-      /* data kanal per lapisan */
-      for (const rec of recs) {
-        const cw = Math.max(0, rec.right - rec.left), ch = Math.max(0, rec.bottom - rec.top);
-        const chanData = [];
-        for (const chn of rec.channels) {
-          const comp = r.u16();
-          const planes = new Uint8Array(Math.max(0, cw * ch));
-          if (cw && ch) psdParseChannel(r, comp, chn.len, cw, ch, depth, planes);
-          else r.pos += Math.max(0, chn.len - 2);
-          chanData.push({ id: chn.id, plane: planes, len: chn.len });
-        }
-        rec.chanData = chanData;
-      }
-      r.pos = liEnd;
-      /* bangun kanvas */
-      const activeGroup = [];
-      for (const rec of recs) {
-        if (rec.skipLayer) { activeGroup.pop(); continue; }
-        if (rec.isGroup) {
-          const g = { id: null, name: rec.name, isGroup: true, expanded: rec.expanded !== false, visible: rec.visible, opacity: Math.round(rec.opacity / 2.55), blendMode: "source-over", group: activeGroup.length ? activeGroup[activeGroup.length - 1] : null, canvas: null };
-          parsedLayers.push(g);
-          activeGroup.push(parsedLayers.length - 1);
-          continue;
-        }
-        const cv = psdLayerCanvas(rec, w, h, rec.chanData, mode);
-        if (!cv) continue;
-        parsedLayers.push({
-          name: rec.name, canvas: cv, visible: rec.visible,
-          opacity: Math.round(rec.opacity / 2.55), blendMode: rec.blend,
-          isGroup: false, expanded: true,
-          groupIndex: activeGroup.length ? activeGroup[activeGroup.length - 1] : null,
-        });
-      }
-      r.pos = lmEnd;
+      if (recs && recs.length) parsedLayers = psdBuildLayers(recs, w, h, mode);
     }
   } catch (e) {
+    console.warn("Gagal membaca layer, pakai gambar komposit:", e.message);
     parsedLayers = [];
-  try { r.pos = lmStart + lmLen; } catch(e) { if (r.byteLength) r.pos = Math.min(r.pos, r.byteLength); }
   }
-  r.pos = lmStart + lmLen;
+  r.pos = lmEnd;
 
   /* gambar komposit */
-  let comp = 0;
-  try { comp = r.u16(); } catch(e) { comp = 0; }
-  const compPlanes = [];
-  let nCh = Math.max(1, gray ? 1 : 3);
+  let nCh = gray ? 1 : 3;
   if (mode === 4) nCh = 4;
   if (mode === 2) nCh = 1;
-  const bppC = Math.max(1, depth / 8);
-  const rowLen = w * bppC;
-  if (comp === 0) {
-    const compPlanesArr = [];
-    if (mode === 4) {
-      for (let c = 0; c < 4; c++) {
-        const plane = new Uint8Array(w * h);
-        try {
-          if (r.pos + rowLen * h <= r.byteLength) {
-            for (let y = 0; y < h; y++) for (let x = 0; x < w; x++) plane[y * w + x] = r.dv.getUint8(r.pos + y * rowLen + x * bppC);
-            r.pos += rowLen * h;
-          }
-        } catch(e) {}
-        compPlanesArr.push(plane);
-      }
-    } else if (mode === 2) {
-      const plane = new Uint8Array(w * h);
-      try {
-        if (r.pos + rowLen * h <= r.byteLength) {
-          for (let y = 0; y < h; y++) for (let x = 0; x < w; x++) plane[y * w + x] = r.dv.getUint8(r.pos + y * rowLen + x * bppC);
-          r.pos += rowLen * h;
-        }
-      } catch(e) {}
-      compPlanesArr.push(plane);
-    } else {
-      for (let c = 0; c < nCh; c++) {
-        const plane = new Uint8Array(w * h);
-        try {
-          if (r.pos + rowLen * h <= r.byteLength) {
-            for (let y = 0; y < h; y++) for (let x = 0; x < w; x++) plane[y * w + x] = r.dv.getUint8(r.pos + y * rowLen + x * bppC);
-            r.pos += rowLen * h;
-          }
-        } catch(e) {}
-        compPlanesArr.push(plane);
-      }
-    }
-    compPlanesArr.forEach(p => compPlanes.push(p));
-  } else if (comp === 1) {
-    const p0 = r.pos;
-    const readLayout = (perChannel) => {
-      const planes = [];
-      let q = p0, ok = true;
-      try {
-        if (!perChannel) {
-          if (q + nCh * h * 2 > r.byteLength) { ok = false; return { planes: [], ok: false, end: q }; }
-          const allCounts = [];
-          for (let i = 0; i < nCh * h; i++) { if (q + 2 > r.byteLength) break; allCounts.push(r.dv.getUint16(q + i * 2)); }
-          q += nCh * h * 2;
-          for (let c = 0; c < nCh; c++) {
-            const plane = new Uint8Array(w * h);
-            for (let y = 0; y < h; y++) {
-              const cnt = allCounts[c * h + y] || 0;
-              if (q + cnt > r.byteLength) { ok = false; break; }
-              const row = psdUnpackRow(new Uint8Array(r.buf.buffer, r.buf.byteOffset + q, cnt), cnt, rowLen);
-              for (let x = 0; x < w; x++) plane[y * w + x] = row[x * bppC];
-              q += cnt;
-            }
-            planes.push(plane);
-          }
-        } else {
-          for (let c = 0; c < nCh; c++) {
-            if (q + h * 2 > r.byteLength) { ok = false; break; }
-            const counts = [];
-            for (let y = 0; y < h; y++) { if (q + 2 > r.byteLength) break; counts.push(r.dv.getUint16(q + y * 2)); }
-            q += h * 2;
-            const plane = new Uint8Array(w * h);
-            for (let y = 0; y < h; y++) {
-              const cnt = counts[y] || 0;
-              if (q + cnt > r.byteLength) { ok = false; break; }
-              const row = psdUnpackRow(new Uint8Array(r.buf.buffer, r.buf.byteOffset + q, cnt), cnt, rowLen);
-              for (let x = 0; x < w; x++) plane[y * w + x] = row[x * bppC];
-              q += cnt;
-            }
-            planes.push(plane);
-          }
-        }
-      } catch(e) { ok = false; }
-      if (q > r.buf.byteLength) ok = false;
-      return { planes, ok, end: q };
-    };
-    try {
-      let res = readLayout(true);
-      if (!res.ok || res.end > r.byteLength + 1024) {
-        try {
-          const spec = readLayout(false);
-          if (spec.ok) res = spec;
-        } catch(e) {}
-      }
-      res.planes.forEach(p => compPlanes.push(p));
-    } catch(e) {}
-  } else {
-    console.warn("Kompresi PSD", comp, "tidak didukung (fallback baca kasar) — coba terus");
-    const compPlanesArr = [];
-    if (mode === 4) {
-      for (let c = 0; c < 4; c++) { const plane = new Uint8Array(w * h); compPlanesArr.push(plane); }
-    } else if (mode === 2) { compPlanesArr.push(new Uint8Array(w * h)); }
-    else for (let c = 0; c < nCh; c++) compPlanesArr.push(new Uint8Array(w * h));
-    compPlanesArr.forEach(p => compPlanes.push(p));
-  }
+  nCh = Math.min(nCh, Math.max(1, channels));
+  let compPlanes = [];
+  try { compPlanes = psdReadComposite(r, w, h, channels, nCh, depth, big); } catch (e) { console.warn("komposit gagal:", e.message); }
   const composite = psdCanvasFromPlanes(compPlanes, w, h, mode);
 
   if (!parsedLayers.length && composite) {
-    parsedLayers.push({ name: "Background", canvas: composite, visible: true, opacity: 100, blendMode: "source-over", isGroup: false, expanded: true, groupIndex: null });
+    parsedLayers.push({ name: "Background", canvas: composite, offX: 0, offY: 0, visible: true, opacity: 100, blendMode: "source-over", isGroup: false, expanded: true, groupIndex: null });
   }
   for (const l of parsedLayers) if (l.isGroup && !l.canvas) l.canvas = document.createElement("canvas");
   window.__psdPalette = null;
-  return { w, h, depth, layers: parsedLayers, composite, mode };
+  return { w, h, depth, layers: parsedLayers, composite, mode, isPSB: big };
 }

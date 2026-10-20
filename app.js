@@ -2594,7 +2594,7 @@ async function openPSDFile(file) {
         idxToId.set(i, g.id);
       } else {
         const l = createLayer(sl.name || ("Lapisan " + (i + 1)), doc.w, doc.h);
-        l.canvas.getContext("2d").drawImage(sl.canvas, 0, 0);
+        l.canvas.getContext("2d").drawImage(sl.canvas, sl.offX || 0, sl.offY || 0);
         l.visible = sl.visible !== false;
         l.opacity = sl.opacity == null ? 100 : clamp(sl.opacity, 0, 100);
         l.blendMode = sl.blendMode || "source-over";
@@ -2622,7 +2622,7 @@ async function openPSDFile(file) {
 }
 function openAnyFile(file) {
   if (!file) return;
-  if (/\.psd$/i.test(file.name) || file.type === "image/vnd.adobe.photoshop") return openPSDFile(file);
+  if (/\.(psd|psb)$/i.test(file.name) || file.type === "image/vnd.adobe.photoshop") return openPSDFile(file);
   if (/\.json$/i.test(file.name)) return openProjectFile(file);
   if (file.type.startsWith("image/")) return openImageFile(file);
   toast("Format file tidak didukung", true);
