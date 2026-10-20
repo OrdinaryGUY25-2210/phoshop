@@ -212,29 +212,28 @@ function psdReader(buf) {
   if (!(buf instanceof Uint8Array)) buf = new Uint8Array(buf);
   const byteLength = buf.byteLength;
   const dv = new DataView(buf.buffer, buf.byteOffset, byteLength);
-  function need(n){
-    n = Math.max(0, n|0);
-    if (r._p + n > byteLength) throw new Error("File PSD terpotong atau rusak (outside of databound)");
-  }
   const r = {
     dv, buf, byteLength, _p: 0,
     get pos() { return this._p || 0; },
     set pos(v) { this._p = Math.max(0, v|0); },
-    need,
-    u8() { need(1); const v = dv.getUint8(this._p); this._p += 1; return v; },
-    u16() { need(2); const v = dv.getUint16(this._p); this._p += 2; return v; },
-    i16() { need(2); const v = dv.getInt16(this._p); this._p += 2; return v; },
-    u32() { need(4); const v = dv.getUint32(this._p); this._p += 4; return v; },
-    i32() { need(4); const v = dv.getInt32(this._p); this._p += 4; return v; },
+    need(n){
+      n = Math.max(0, n|0);
+      if (r._p + n > r.byteLength) throw new Error("File PSD terpotong atau rusak (outside of databound)");
+    },
+    u8() { this.need(1); const v = dv.getUint8(this._p); this._p += 1; return v; },
+    u16() { this.need(2); const v = dv.getUint16(this._p); this._p += 2; return v; },
+    i16() { this.need(2); const v = dv.getInt16(this._p); this._p += 2; return v; },
+    u32() { this.need(4); const v = dv.getUint32(this._p); this._p += 4; return v; },
+    i32() { this.need(4); const v = dv.getInt32(this._p); this._p += 4; return v; },
     str(n) {
       n = Math.max(0, n|0);
-      need(n);
+      this.need(n);
       let s = "";
       for (let i = 0; i < n; i++) s += String.fromCharCode(dv.getUint8(this._p + i));
       this._p += n;
       return s;
     },
-    skip(n) { n = Math.max(0, n|0); need(n); this._p += n; },
+    skip(n) { n = Math.max(0, n|0); this.need(n); this._p += n; },
   };
   return r;
 }
@@ -383,19 +382,22 @@ function psdLayerCanvas(rec, docW, docH, chanData, mode) {
   return full;
 }
 function parsePSD(arrayBuffer) {
-  const r = psdReader(arrayBuffer);
+  let r;
+  try { r = psdReader(arrayBuffer); } catch(e) { throw e; }
   if (r.str(4) !== "8BPS") throw new Error("bukan file PSD");
   const version = r.u16();
-  if (version !== 1) throw new Error("versi PSD tidak didukung");
+  if (version !== 1 && version !== 2) throw new Error("versi PSD tidak didukung");
   r.skip(6);
   const channels = r.u16();
   const h = r.u32(), w = r.u32();
   const depth = r.u16();
   const mode = r.u16();
   if (!w || !h) throw new Error("dimensi tidak valid");
-  if (w * h > 60000000) throw new Error("dokumen terlalu besar (maks 60 MP)");
-  if (![8, 16].includes(depth)) throw new Error("kedalaman " + depth + "-bit belum didukung");
-  if (mode !== 3 && mode !== 1 && mode !== 4 && mode !== 2) { console.warn("Mode PSD", mode, "tidak lengkap, coba render as RGB"); }
+  if (w * h > 80000000) throw new Error("dokumen terlalu besar");
+  if (![8, 16, 1].includes(depth)) {
+    // try to proceed anyway
+  }
+  if (mode !== 3 && mode !== 1 && mode !== 4 && mode !== 2 && mode !== 9 && mode !== 8 && mode !== 7 && mode !== 6) { console.warn("Mode PSD", mode, "tidak lengkap, coba render"); }
   const gray = (mode === 1);
 
   const colorModeDataLen = r.u32();
@@ -411,10 +413,10 @@ function parsePSD(arrayBuffer) {
   } else {
     window.__psdPalette = null;
   }
-  r.skip(r.u32());
+  try {   try { r.skip(r.u32()); } catch(e) {} } catch(e) {}
 
-  const lmLen = r.u32();
-  const lmStart = r.pos;
+  let lmLen = 0, lmStart = r.pos;
+  try { lmLen = r.u32(); lmStart = r.pos; } catch(e) { lmLen = 0; lmStart = r.pos; }
   const layers = [];
   let parsedLayers = [];
   try {
@@ -509,38 +511,54 @@ function parsePSD(arrayBuffer) {
     }
   } catch (e) {
     parsedLayers = [];
-    r.pos = lmStart + lmLen;
+  try { r.pos = lmStart + lmLen; } catch(e) { if (r.byteLength) r.pos = Math.min(r.pos, r.byteLength); }
   }
   r.pos = lmStart + lmLen;
 
   /* gambar komposit */
-  const comp = r.u16();
+  let comp = 0;
+  try { comp = r.u16(); } catch(e) { comp = 0; }
   const compPlanes = [];
-  const nCh = Math.max(1, gray ? 1 : 3);
-  const rowLen = w * depth / 8;
+  let nCh = Math.max(1, gray ? 1 : 3);
+  if (mode === 4) nCh = 4;
+  if (mode === 2) nCh = 1;
+  const bppC = Math.max(1, depth / 8);
+  const rowLen = w * bppC;
   if (comp === 0) {
-      const compPlanesArr = [];
-      if (mode === 4) {
-        for (let c = 0; c < 4; c++) {
-          const plane = new Uint8Array(w * h);
-          for (let y = 0; y < h; y++) for (let x = 0; x < w; x++) plane[y * w + x] = r.dv.getUint8(r.pos + y * rowLen + x * depth / 8);
-          r.pos += rowLen * h;
-          compPlanesArr.push(plane);
-        }
-      } else if (mode === 2) {
+    const compPlanesArr = [];
+    if (mode === 4) {
+      for (let c = 0; c < 4; c++) {
         const plane = new Uint8Array(w * h);
-        for (let y = 0; y < h; y++) for (let x = 0; x < w; x++) plane[y * w + x] = r.dv.getUint8(r.pos + y * rowLen + x * depth / 8);
-        r.pos += rowLen * h;
+        try {
+          if (r.pos + rowLen * h <= r.byteLength) {
+            for (let y = 0; y < h; y++) for (let x = 0; x < w; x++) plane[y * w + x] = r.dv.getUint8(r.pos + y * rowLen + x * bppC);
+            r.pos += rowLen * h;
+          }
+        } catch(e) {}
         compPlanesArr.push(plane);
-      } else {
-        for (let c = 0; c < nCh; c++) {
-          const plane = new Uint8Array(w * h);
-          for (let y = 0; y < h; y++) for (let x = 0; x < w; x++) plane[y * w + x] = r.dv.getUint8(r.pos + y * rowLen + x * depth / 8);
-          r.pos += rowLen * h;
-          compPlanesArr.push(plane);
-        }
       }
-      compPlanesArr.forEach(p => compPlanes.push(p));
+    } else if (mode === 2) {
+      const plane = new Uint8Array(w * h);
+      try {
+        if (r.pos + rowLen * h <= r.byteLength) {
+          for (let y = 0; y < h; y++) for (let x = 0; x < w; x++) plane[y * w + x] = r.dv.getUint8(r.pos + y * rowLen + x * bppC);
+          r.pos += rowLen * h;
+        }
+      } catch(e) {}
+      compPlanesArr.push(plane);
+    } else {
+      for (let c = 0; c < nCh; c++) {
+        const plane = new Uint8Array(w * h);
+        try {
+          if (r.pos + rowLen * h <= r.byteLength) {
+            for (let y = 0; y < h; y++) for (let x = 0; x < w; x++) plane[y * w + x] = r.dv.getUint8(r.pos + y * rowLen + x * bppC);
+            r.pos += rowLen * h;
+          }
+        } catch(e) {}
+        compPlanesArr.push(plane);
+      }
+    }
+    compPlanesArr.forEach(p => compPlanes.push(p));
   } else if (comp === 1) {
     const p0 = r.pos;
     const readLayout = (perChannel) => {
